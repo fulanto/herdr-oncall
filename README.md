@@ -1,8 +1,8 @@
 # Oncall
 
-Herdr **control plane**. Plugin id is `com.codreamer.herdr.oncall` (reverse-DNS). Telegram is a transport, not part of the id.
+Herdr **control plane**. Plugin id is `com.codreamer.herdr.oncall` (reverse-DNS). Telegram is a channel, not part of the id.
 
-Telegram is only the first transport. If notify + reply work, a thin app talks to **this same plugin**. Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
+Telegram is only the first channel. If notify + reply work, a thin app talks to **this same plugin**. Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
 
 **v1 is notify-only:** when an agent becomes `blocked`, ping Telegram. No reply buttons, no `agent prompt`.
 
@@ -65,7 +65,7 @@ description = "toggle Oncall"
 
 | key | default | meaning |
 |---|---|---|
-| `TRANSPORT` | `telegram` | v1 channel; plugin id does not change if you add `app` |
+| `CHANNEL` | `telegram` | v1 delivery path; plugin id does not change if you add `app` |
 | `TELEGRAM_BOT_TOKEN` | required | BotFather token |
 | `TELEGRAM_CHAT_ID` | required | numeric chat; only destination |
 | `NOTIFY_ON` | `blocked` | comma list |
