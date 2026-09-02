@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { formatMessage, notifyStatuses, shouldNotify } from "./lib.mjs";
+import { formatMessage, notifyStatuses, seedConfigEnv, shouldNotify } from "./lib.mjs";
 
 test("v1 default notify list is blocked only", () => {
   assert.deepEqual(notifyStatuses(undefined), ["blocked"]);
@@ -24,4 +27,29 @@ test("formatMessage names workspace, pane, and status without emoji", () => {
   assert.match(text, /货架 · w1:p2/);
   assert.match(text, /waiting for input/);
   assert.equal(/[\u{1F300}-\u{1FAFF}]/u.test(text), false);
+});
+
+test("seedConfigEnv copies example and a blank env into the config dir", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oncall-"));
+  const previous = process.env.HERDR_PLUGIN_CONFIG_DIR;
+  process.env.HERDR_PLUGIN_CONFIG_DIR = dir;
+  try {
+    const envPath = seedConfigEnv();
+    assert.equal(envPath, join(dir, ".env"));
+    const example = readFileSync(join(dir, ".env.example"), "utf8");
+    const env = readFileSync(envPath, "utf8");
+    assert.match(example, /TELEGRAM_BOT_TOKEN=/);
+    assert.match(env, /TELEGRAM_BOT_TOKEN=/);
+    writeFileSync(envPath, "TELEGRAM_BOT_TOKEN=keep\n");
+    seedConfigEnv();
+    assert.equal(readFileSync(envPath, "utf8"), "TELEGRAM_BOT_TOKEN=keep\n");
+    assert.match(readFileSync(join(dir, ".env.example"), "utf8"), /CHANNEL=telegram/);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.HERDR_PLUGIN_CONFIG_DIR;
+    } else {
+      process.env.HERDR_PLUGIN_CONFIG_DIR = previous;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

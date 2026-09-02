@@ -20,25 +20,24 @@ export function configDirPath() {
     return process.env.HERDR_PLUGIN_CONFIG_DIR;
   }
   const result = runHerdr(["plugin", "config-dir", PLUGIN_ID]);
-  if (result.error) {
-    throw result.error;
+  const printed = !result.error && result.status === 0 ? result.stdout.trim() : "";
+  if (printed) {
+    return printed;
   }
-  if (result.status !== 0) {
-    throw new Error(result.stderr?.trim() || `herdr plugin config-dir exited ${result.status}`);
-  }
-  const dir = result.stdout.trim();
-  if (!dir) {
-    throw new Error("herdr plugin config-dir printed nothing");
-  }
-  return dir;
+  const configHome =
+    process.env.XDG_CONFIG_HOME ||
+    (process.env.HOME ? join(process.env.HOME, ".config") : pluginRoot);
+  return join(configHome, "herdr", "plugins", "config", PLUGIN_ID);
 }
 
 export function seedConfigEnv() {
   const dir = configDirPath();
   mkdirSync(dir, { recursive: true });
+  const src = join(pluginRoot, ".env.example");
+  copyFileSync(src, join(dir, ".env.example"));
   const dest = join(dir, ".env");
   if (!existsSync(dest)) {
-    copyFileSync(join(pluginRoot, ".env.example"), dest);
+    copyFileSync(src, dest);
   }
   return dest;
 }

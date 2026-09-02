@@ -22,14 +22,14 @@ herdr plugin install fulanto/herdr-oncall --yes
 herdr plugin config-dir com.codreamer.herdr.oncall
 ```
 
-Put `.env` in the directory printed by the second command (copy `.env.example` from the repo if it is missing). Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Token never goes in git.
+第二行打印的目录里会有 `.env.example` 和一份空白 `.env`（`plugin install` 的 build 步骤种进去）。填 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`。Token 不要进 git。已有 `.env` 不会被覆盖。
 
 ```sh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5
 ```
 
-`plugin action invoke` does **not** print script stdout. It returns JSON immediately (`plugin_action_invoked`, `status: running`). Real output is in `plugin log list`. A Telegram test ping means the path works.
+`plugin action invoke` **不会**把脚本 stdout 打到终端：它立刻返回一条 JSON（`plugin_action_invoked`，`status: running`）。真正的输出在 `plugin log list` 里。Telegram 里出现 test ping 就说明通路通了。
 
 Needs Node.js 18+ and Herdr >= 0.7.0. Reinstall after pulling a new version:
 
@@ -42,14 +42,14 @@ Config `.env` in `config-dir` is kept across reinstalls.
 
 If `plugin log` says `No such file or directory (os error 2)` for `node`, Herdr could not see Node (common with nvm when Herdr was not started from that terminal). v0.1.6 loads nvm/fnm/volta/Homebrew via `run-node.sh`. Reinstall, then invoke `setup`/`test` again.
 
-To hack on the plugin locally:
+改插件源码时再 clone：
 
 ```sh
 git clone https://github.com/fulanto/herdr-oncall.git
 node herdr-oncall/install.mjs
 ```
 
-`install.mjs` prints the config path when run under Node. The same script invoked via `herdr plugin action invoke setup` writes to the plugin log instead.
+`install.mjs` 是直接跑 Node，所以路径会打在终端上。通过 `herdr plugin action invoke setup` 跑时同样进日志。
 
 Toggle:
 
