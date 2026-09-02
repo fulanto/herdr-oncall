@@ -19,18 +19,19 @@ v2: reply → `agent send-keys` if still blocked; `agent prompt` only when idle/
 
 ```sh
 herdr plugin install fulanto/herdr-oncall --yes
-herdr plugin action invoke setup --plugin com.codreamer.herdr.oncall
+herdr plugin config-dir com.codreamer.herdr.oncall
 ```
 
-`setup` writes a blank `.env` and prints the path. Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` there. Token never goes in git.
-
-Then:
+Put `.env` in the directory printed by the second command (copy `.env.example` from the repo if it is missing). Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Token never goes in git.
 
 ```sh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
+herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5
 ```
 
-Needs Node.js 18+ and Herdr >= 0.7.0. If you already linked an older id, `setup` unlinks it first.
+`plugin action invoke` does **not** print script stdout. It returns JSON immediately (`plugin_action_invoked`, `status: running`). Real output is in `plugin log list`. A Telegram test ping means the path works.
+
+Needs Node.js 18+ and Herdr >= 0.7.0.
 
 To hack on the plugin locally:
 
@@ -38,6 +39,8 @@ To hack on the plugin locally:
 git clone https://github.com/fulanto/herdr-oncall.git
 node herdr-oncall/install.mjs
 ```
+
+`install.mjs` prints the config path when run under Node. The same script invoked via `herdr plugin action invoke setup` writes to the plugin log instead.
 
 Toggle:
 
