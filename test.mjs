@@ -1,4 +1,4 @@
-import { formatMessage, loadDotEnv, sendTelegram } from "./lib.mjs";
+import { formatMessage, loadDotEnv, seedConfigEnv, sendTelegram } from "./lib.mjs";
 
 loadDotEnv();
 
@@ -6,7 +6,8 @@ const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
 const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
 
 if (!token || !chatId) {
-  console.error("missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+  const envPath = seedConfigEnv();
+  console.error(`fill TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in:\n${envPath}`);
   process.exit(1);
 }
 

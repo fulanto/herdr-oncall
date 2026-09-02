@@ -17,35 +17,27 @@ v2: reply → `agent send-keys` if still blocked; `agent prompt` only when idle/
 
 ## Install
 
-Repo is private. Clone, then link:
-
 ```sh
 git clone git@github.com:fulanto/herdr-oncall.git
-cd herdr-oncall
-herdr plugin link .
-CONFIG_DIR="$(herdr plugin config-dir com.codreamer.herdr.oncall)"
-cp .env.example "$CONFIG_DIR/.env"
+node herdr-oncall/install.mjs
 ```
 
-Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Token stays in the config directory, never in git.
+The script links the plugin, writes `.env` if missing, and prints the path. Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` there. Token never goes in git.
 
-If Herdr can see a public copy later:
-
-```sh
-herdr plugin install fulanto/herdr-oncall
-```
-
-Requires Node.js 18+, Herdr >= 0.7.0, no npm packages.
-
-If you already linked an older id (`oncall`, `oncall.telegram`, `fulanto.oncall`), unlink it and link this tree again.
-
-## Prove the path
+Then:
 
 ```sh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 ```
 
-Park an agent on a permission dialog until the sidebar says `blocked`. Telegram should get a two-line ping. **Do not answer from Telegram in v1** — type in the pane.
+Needs Node.js 18+ and Herdr >= 0.7.0. If you already linked an older id, `install.mjs` unlinks it first.
+
+If the repo is public later:
+
+```sh
+herdr plugin install fulanto/herdr-oncall --yes
+herdr plugin action invoke setup --plugin com.codreamer.herdr.oncall
+```
 
 Toggle:
 

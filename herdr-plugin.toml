@@ -1,9 +1,14 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.1.4"
+version = "0.1.5"
 min_herdr_version = "0.7.0"
 description = "Host control plane for blocked agents. v1 channel: Telegram notify-only."
 platforms = ["linux", "macos", "windows"]
+
+[[actions]]
+id = "setup"
+title = "Link Oncall and seed config"
+command = ["node", "install.mjs"]
 
 [[actions]]
 id = "toggle"
