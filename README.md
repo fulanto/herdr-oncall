@@ -1,15 +1,19 @@
-# Oncall Telegram
+# Oncall
 
-Herdr plugin. **v1 is notify-only:** when an agent becomes `blocked`, ping a Telegram chat. No reply buttons, no `agent prompt`, no App.
+Herdr **control plane**. Plugin id is `oncall` — the product, not a channel.
 
-Derived from the cookbook example [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify) (Herdr 0.7 plugin system). Changes in this first cut:
+Telegram is only the first transport. If notify + reply work, a thin app talks to **this same plugin** (same config dir, same pane ids). Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
+
+**v1 is notify-only:** when an agent becomes `blocked`, ping Telegram. No reply buttons, no `agent prompt`.
+
+Derived from [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify). Differences:
 
 - default `NOTIFY_ON=blocked` (the example also fired on `done`)
-- message includes workspace + pane id (needed for a later reply router)
+- message includes workspace + pane id (for a later reply router)
 - 2s debounce per pane+status
-- `test` action to send a canned ping
+- `test` action
 
-v2 (not in this repo yet): reply to the card → `agent send-keys` if still blocked, `agent prompt` only when idle/working.
+v2: reply → `agent send-keys` if still blocked; `agent prompt` only when idle/working.
 
 ## Install
 
@@ -19,7 +23,7 @@ Repo is private. Clone, then link:
 git clone git@github.com:fulanto/herdr-oncall.git
 cd herdr-oncall
 herdr plugin link .
-CONFIG_DIR="$(herdr plugin config-dir oncall.telegram)"
+CONFIG_DIR="$(herdr plugin config-dir oncall)"
 cp .env.example "$CONFIG_DIR/.env"
 ```
 
@@ -33,48 +37,47 @@ herdr plugin install fulanto/herdr-oncall
 
 Requires Node.js 18+, Herdr >= 0.7.0, no npm packages.
 
+If you already linked v0.1.0 as `oncall.telegram`, unlink it and link this tree again so Herdr picks up id `oncall`.
+
 ## Prove the path
 
-1. Enable (default on after `.env` is filled):
-
 ```sh
-herdr plugin action invoke test --plugin oncall.telegram
+herdr plugin action invoke test --plugin oncall
 ```
 
-2. Start an agent in a pane and park it on a permission dialog until the sidebar says `blocked`.
-3. Telegram should get a two-line ping. **Do not answer from Telegram in v1** — attach with any SSH client and type in the pane.
+Park an agent on a permission dialog until the sidebar says `blocked`. Telegram should get a two-line ping. **Do not answer from Telegram in v1** — type in the pane.
 
 Toggle:
 
 ```sh
-herdr plugin action invoke toggle --plugin oncall.telegram
+herdr plugin action invoke toggle --plugin oncall
 ```
-
-Optional keybind:
 
 ```toml
 [[keys.command]]
 key = "prefix+shift+t"
 type = "plugin_action"
-command = "oncall.telegram.toggle"
-description = "toggle Oncall Telegram"
+command = "oncall.toggle"
+description = "toggle Oncall"
 ```
 
 ## Config
 
 | key | default | meaning |
 |---|---|---|
+| `TRANSPORT` | `telegram` | v1 channel; plugin id does not change if you add `app` |
 | `TELEGRAM_BOT_TOKEN` | required | BotFather token |
 | `TELEGRAM_CHAT_ID` | required | numeric chat; only destination |
-| `NOTIFY_ON` | `blocked` | comma list; add `done` only after blocked is reliable |
+| `NOTIFY_ON` | `blocked` | comma list |
 | `DEBOUNCE_MS` | `2000` | suppress repeat pane+status |
 | `HERDR_TELEGRAM_ENABLED` | `1` | default before first toggle |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set host title while on |
 
 ## What v1 will not do
 
-- send pane transcript to Telegram (keeps the first ping small)
+- send pane transcript
 - accept replies
 - call `agent prompt` / `agent send-keys`
+- ship a phone app
 
-Those belong in v2, after this path is boringly reliable.
+Those sit behind this same `oncall` id once the ping is reliable.

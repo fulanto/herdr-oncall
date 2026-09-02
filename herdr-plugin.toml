@@ -1,28 +1,28 @@
-id = "oncall.telegram"
-name = "Oncall Telegram"
-version = "0.1.0"
+id = "oncall"
+name = "Oncall"
+version = "0.1.1"
 min_herdr_version = "0.7.0"
-description = "Telegram ping when a Herdr agent is blocked. Notify-only v1."
+description = "Host control plane for blocked agents. v1 transport: Telegram notify-only."
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
 id = "toggle"
-title = "Toggle Oncall Telegram"
+title = "Toggle Oncall"
 command = ["node", "toggle.mjs"]
 
 [[actions]]
 id = "enable"
-title = "Enable Oncall Telegram"
+title = "Enable Oncall"
 command = ["node", "toggle.mjs", "on"]
 
 [[actions]]
 id = "disable"
-title = "Disable Oncall Telegram"
+title = "Disable Oncall"
 command = ["node", "toggle.mjs", "off"]
 
 [[actions]]
 id = "test"
-title = "Send a test Telegram ping"
+title = "Send a test ping"
 command = ["node", "test.mjs"]
 
 [[events]]

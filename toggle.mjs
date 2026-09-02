@@ -19,5 +19,5 @@ const enabled =
 setMode(enabled);
 setWindowTitleIndicator(enabled);
 
-console.log(`Oncall Telegram ${enabled ? "enabled" : "disabled"}.`);
+console.log(`Oncall ${enabled ? "enabled" : "disabled"}.`);
 console.log(`State: ${modePath()}`);
