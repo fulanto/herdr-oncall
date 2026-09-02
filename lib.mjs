@@ -65,7 +65,7 @@ export function stateDir() {
   const stateHome =
     process.env.XDG_STATE_HOME ||
     (process.env.HOME ? join(process.env.HOME, ".local", "state") : pluginRoot);
-  return join(stateHome, "herdr-oncall", "telegram");
+  return join(stateHome, "herdr-oncall");
 }
 
 export function modePath() {
