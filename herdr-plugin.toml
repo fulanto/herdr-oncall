@@ -1,6 +1,6 @@
-id = "oncall"
+id = "fulanto.oncall"
 name = "Oncall"
-version = "0.1.1"
+version = "0.1.2"
 min_herdr_version = "0.7.0"
 description = "Host control plane for blocked agents. v1 transport: Telegram notify-only."
 platforms = ["linux", "macos", "windows"]

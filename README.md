@@ -1,8 +1,8 @@
 # Oncall
 
-Herdr **control plane**. Plugin id is `oncall` — the product, not a channel.
+Herdr **control plane**. Plugin id is `fulanto.oncall` (GitHub user + product), not a channel and not a generic word.
 
-Telegram is only the first transport. If notify + reply work, a thin app talks to **this same plugin** (same config dir, same pane ids). Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
+Telegram is only the first transport. If notify + reply work, a thin app talks to **this same plugin**. Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
 
 **v1 is notify-only:** when an agent becomes `blocked`, ping Telegram. No reply buttons, no `agent prompt`.
 
@@ -23,7 +23,7 @@ Repo is private. Clone, then link:
 git clone git@github.com:fulanto/herdr-oncall.git
 cd herdr-oncall
 herdr plugin link .
-CONFIG_DIR="$(herdr plugin config-dir oncall)"
+CONFIG_DIR="$(herdr plugin config-dir fulanto.oncall)"
 cp .env.example "$CONFIG_DIR/.env"
 ```
 
@@ -37,12 +37,12 @@ herdr plugin install fulanto/herdr-oncall
 
 Requires Node.js 18+, Herdr >= 0.7.0, no npm packages.
 
-If you already linked v0.1.0 as `oncall.telegram`, unlink it and link this tree again so Herdr picks up id `oncall`.
+If you already linked `oncall` or `oncall.telegram`, unlink it and link this tree again so Herdr picks up `fulanto.oncall`.
 
 ## Prove the path
 
 ```sh
-herdr plugin action invoke test --plugin oncall
+herdr plugin action invoke test --plugin fulanto.oncall
 ```
 
 Park an agent on a permission dialog until the sidebar says `blocked`. Telegram should get a two-line ping. **Do not answer from Telegram in v1** — type in the pane.
@@ -50,14 +50,14 @@ Park an agent on a permission dialog until the sidebar says `blocked`. Telegram 
 Toggle:
 
 ```sh
-herdr plugin action invoke toggle --plugin oncall
+herdr plugin action invoke toggle --plugin fulanto.oncall
 ```
 
 ```toml
 [[keys.command]]
 key = "prefix+shift+t"
 type = "plugin_action"
-command = "oncall.toggle"
+command = "fulanto.oncall.toggle"
 description = "toggle Oncall"
 ```
 
@@ -80,4 +80,4 @@ description = "toggle Oncall"
 - call `agent prompt` / `agent send-keys`
 - ship a phone app
 
-Those sit behind this same `oncall` id once the ping is reliable.
+Those sit behind this same `fulanto.oncall` id once the ping is reliable.
