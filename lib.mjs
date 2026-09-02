@@ -1,9 +1,47 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const pluginRoot = dirname(fileURLToPath(import.meta.url));
+export const PLUGIN_ID = "com.codreamer.herdr.oncall";
+export const OLD_PLUGIN_IDS = ["oncall", "oncall.telegram", "fulanto.oncall"];
+
+export function herdrBin() {
+  return process.env.HERDR_BIN_PATH || "herdr";
+}
+
+export function runHerdr(args) {
+  return spawnSync(herdrBin(), args, { encoding: "utf8" });
+}
+
+export function configDirPath() {
+  if (process.env.HERDR_PLUGIN_CONFIG_DIR) {
+    return process.env.HERDR_PLUGIN_CONFIG_DIR;
+  }
+  const result = runHerdr(["plugin", "config-dir", PLUGIN_ID]);
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(result.stderr?.trim() || `herdr plugin config-dir exited ${result.status}`);
+  }
+  const dir = result.stdout.trim();
+  if (!dir) {
+    throw new Error("herdr plugin config-dir printed nothing");
+  }
+  return dir;
+}
+
+export function seedConfigEnv() {
+  const dir = configDirPath();
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, ".env");
+  if (!existsSync(dest)) {
+    copyFileSync(join(pluginRoot, ".env.example"), dest);
+  }
+  return dest;
+}
 
 export function loadDotEnv(path) {
   const paths = path ? [path] : defaultDotEnvPaths();
