@@ -40,7 +40,7 @@ herdr plugin install fulanto/herdr-oncall --yes
 
 Config `.env` in `config-dir` is kept across reinstalls.
 
-If `plugin log` says `No such file or directory (os error 2)` for `node`, Herdr could not see Node (common with nvm when Herdr was not started from that terminal). v0.1.6 loads nvm/fnm/volta/Homebrew via `run-node.sh`. Reinstall, then invoke `setup`/`test` again.
+If `plugin log` says `node not found`, Herdr's server PATH is not your login shell. v0.1.8 looks in nvm/fnm/mise/Homebrew and then `zsh -lic`. Reinstall, then invoke `test` again. Or start Herdr from a terminal where `command -v node` works.
 
 改插件源码时再 clone：
 

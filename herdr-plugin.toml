@@ -1,6 +1,6 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.1.7"
+version = "0.1.8"
 min_herdr_version = "0.7.0"
 description = "Host control plane for blocked agents. v1 channel: Telegram notify-only."
 platforms = ["linux", "macos", "windows"]
