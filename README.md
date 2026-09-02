@@ -18,11 +18,11 @@ v2: reply → `agent send-keys` if still blocked; `agent prompt` only when idle/
 ## Install
 
 ```sh
-git clone git@github.com:fulanto/herdr-oncall.git
-node herdr-oncall/install.mjs
+herdr plugin install fulanto/herdr-oncall --yes
+herdr plugin action invoke setup --plugin com.codreamer.herdr.oncall
 ```
 
-The script links the plugin, writes `.env` if missing, and prints the path. Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` there. Token never goes in git.
+`setup` writes a blank `.env` and prints the path. Fill `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` there. Token never goes in git.
 
 Then:
 
@@ -30,13 +30,13 @@ Then:
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 ```
 
-Needs Node.js 18+ and Herdr >= 0.7.0. If you already linked an older id, `install.mjs` unlinks it first.
+Needs Node.js 18+ and Herdr >= 0.7.0. If you already linked an older id, `setup` unlinks it first.
 
-If the repo is public later:
+To hack on the plugin locally:
 
 ```sh
-herdr plugin install fulanto/herdr-oncall --yes
-herdr plugin action invoke setup --plugin com.codreamer.herdr.oncall
+git clone https://github.com/fulanto/herdr-oncall.git
+node herdr-oncall/install.mjs
 ```
 
 Toggle:
