@@ -1,0 +1,40 @@
+import {
+  formatMessage,
+  loadDotEnv,
+  modeEnabled,
+  paneIdFrom,
+  readJsonEnv,
+  resolveStatus,
+  sendTelegram,
+  shouldDebounce,
+  shouldNotify,
+} from "./lib.mjs";
+
+loadDotEnv();
+if (!modeEnabled()) {
+  process.exit(0);
+}
+
+const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
+
+if (!token || !chatId) {
+  console.error("missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+  process.exit(0);
+}
+
+const context = readJsonEnv("HERDR_PLUGIN_CONTEXT_JSON");
+const event = readJsonEnv("HERDR_PLUGIN_EVENT_JSON");
+const status = resolveStatus(event, context);
+
+if (!shouldNotify(status)) {
+  process.exit(0);
+}
+
+const paneId = paneIdFrom(event, context);
+if (shouldDebounce(paneId, status)) {
+  process.exit(0);
+}
+
+const text = formatMessage(context, event, status);
+await sendTelegram(token, chatId, text);
