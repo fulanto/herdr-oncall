@@ -1,6 +1,6 @@
 # Oncall
 
-Herdr **control plane**. Plugin id is `fulanto.oncall` (GitHub user + product), not a channel and not a generic word.
+Herdr **control plane**. Plugin id is `com.codreamer.herdr.oncall` (reverse-DNS). Telegram is a transport, not part of the id.
 
 Telegram is only the first transport. If notify + reply work, a thin app talks to **this same plugin**. Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
 
@@ -23,7 +23,7 @@ Repo is private. Clone, then link:
 git clone git@github.com:fulanto/herdr-oncall.git
 cd herdr-oncall
 herdr plugin link .
-CONFIG_DIR="$(herdr plugin config-dir fulanto.oncall)"
+CONFIG_DIR="$(herdr plugin config-dir com.codreamer.herdr.oncall)"
 cp .env.example "$CONFIG_DIR/.env"
 ```
 
@@ -37,12 +37,12 @@ herdr plugin install fulanto/herdr-oncall
 
 Requires Node.js 18+, Herdr >= 0.7.0, no npm packages.
 
-If you already linked `oncall` or `oncall.telegram`, unlink it and link this tree again so Herdr picks up `fulanto.oncall`.
+If you already linked an older id (`oncall`, `oncall.telegram`, `fulanto.oncall`), unlink it and link this tree again.
 
 ## Prove the path
 
 ```sh
-herdr plugin action invoke test --plugin fulanto.oncall
+herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 ```
 
 Park an agent on a permission dialog until the sidebar says `blocked`. Telegram should get a two-line ping. **Do not answer from Telegram in v1** — type in the pane.
@@ -50,14 +50,14 @@ Park an agent on a permission dialog until the sidebar says `blocked`. Telegram 
 Toggle:
 
 ```sh
-herdr plugin action invoke toggle --plugin fulanto.oncall
+herdr plugin action invoke toggle --plugin com.codreamer.herdr.oncall
 ```
 
 ```toml
 [[keys.command]]
 key = "prefix+shift+t"
 type = "plugin_action"
-command = "fulanto.oncall.toggle"
+command = "com.codreamer.herdr.oncall.toggle"
 description = "toggle Oncall"
 ```
 
@@ -80,4 +80,4 @@ description = "toggle Oncall"
 - call `agent prompt` / `agent send-keys`
 - ship a phone app
 
-Those sit behind this same `fulanto.oncall` id once the ping is reliable.
+Those sit behind this same `com.codreamer.herdr.oncall` id once the ping is reliable.
