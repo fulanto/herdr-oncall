@@ -31,7 +31,16 @@ herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5
 
 `plugin action invoke` does **not** print script stdout. It returns JSON immediately (`plugin_action_invoked`, `status: running`). Real output is in `plugin log list`. A Telegram test ping means the path works.
 
-Needs Node.js 18+ and Herdr >= 0.7.0.
+Needs Node.js 18+ and Herdr >= 0.7.0. Reinstall after pulling a new version:
+
+```sh
+herdr plugin uninstall com.codreamer.herdr.oncall
+herdr plugin install fulanto/herdr-oncall --yes
+```
+
+Config `.env` in `config-dir` is kept across reinstalls.
+
+If `plugin log` says `No such file or directory (os error 2)` for `node`, Herdr could not see Node (common with nvm when Herdr was not started from that terminal). v0.1.6 loads nvm/fnm/volta/Homebrew via `run-node.sh`. Reinstall, then invoke `setup`/`test` again.
 
 To hack on the plugin locally:
 

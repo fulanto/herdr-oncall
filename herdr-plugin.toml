@@ -1,6 +1,6 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.1.5"
+version = "0.1.6"
 min_herdr_version = "0.7.0"
 description = "Host control plane for blocked agents. v1 channel: Telegram notify-only."
 platforms = ["linux", "macos", "windows"]
@@ -8,28 +8,28 @@ platforms = ["linux", "macos", "windows"]
 [[actions]]
 id = "setup"
 title = "Link Oncall and seed config"
-command = ["node", "install.mjs"]
+command = ["/bin/bash", "run-node.sh", "install.mjs"]
 
 [[actions]]
 id = "toggle"
 title = "Toggle Oncall"
-command = ["node", "toggle.mjs"]
+command = ["/bin/bash", "run-node.sh", "toggle.mjs"]
 
 [[actions]]
 id = "enable"
 title = "Enable Oncall"
-command = ["node", "toggle.mjs", "on"]
+command = ["/bin/bash", "run-node.sh", "toggle.mjs", "on"]
 
 [[actions]]
 id = "disable"
 title = "Disable Oncall"
-command = ["node", "toggle.mjs", "off"]
+command = ["/bin/bash", "run-node.sh", "toggle.mjs", "off"]
 
 [[actions]]
 id = "test"
 title = "Send a test ping"
-command = ["node", "test.mjs"]
+command = ["/bin/bash", "run-node.sh", "test.mjs"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["node", "notify.mjs"]
+command = ["/bin/bash", "run-node.sh", "notify.mjs"]
