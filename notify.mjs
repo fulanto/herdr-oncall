@@ -2,6 +2,7 @@ import {
   blockedDelayMs,
   blockedDelayStillMine,
   formatMessage,
+  formatWhere,
   loadDotEnv,
   markBlockedDelay,
   modeEnabled,
@@ -14,6 +15,7 @@ import {
   sleep,
   stillBlocked,
 } from "./lib.mjs";
+import { rememberOutbound } from "./reply.mjs";
 
 loadDotEnv();
 if (!modeEnabled()) {
@@ -57,4 +59,10 @@ if (shouldDebounce(paneId, status)) {
 }
 
 const text = formatMessage(context, event, status);
-await sendTelegram(token, chatId, text);
+const messageId = await sendTelegram(token, chatId, text);
+rememberOutbound({
+  messageId,
+  paneId,
+  status,
+  where: formatWhere(context, event),
+});

@@ -4,85 +4,58 @@ Herdr **control plane**. Plugin id is `com.codreamer.herdr.oncall` (reverse-DNS)
 
 Telegram is only the first channel. If notify + reply work, a thin app talks to **this same plugin**. Do not mint `oncall.telegram` / `oncall.app` as extra Herdr plugins.
 
-**v1 is notify-only:** when an agent becomes `blocked` or `done`, ping Telegram. No reply buttons, no `agent prompt`.
+**v2:** ping Telegram on `blocked` / `done`. Reply to that ping to send input into the pane.
 
-Derived from [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify). Differences:
+- still `blocked` → type into the dialog (`pane send-text` + Enter, or `esc` / `enter` as keys)
+- `done` / `idle` / `working` → `agent prompt` (new instruction)
+- only your `TELEGRAM_CHAT_ID` is accepted
+- a message that is not a reply goes to the last pinged pane
 
-- default `NOTIFY_ON=blocked,done`
-- message includes workspace + pane id (for a later reply router)
-- 2s debounce per pane+status
-- `test` action
-
-v2: reply → `agent send-keys` if still blocked; `agent prompt` only when idle/working.
+Derived from [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify).
 
 ## Install
-
-```sh
-herdr plugin install fulanto/herdr-oncall --yes
-herdr plugin config-dir com.codreamer.herdr.oncall
-```
-
-第二行打印的目录里会有 `.env.example` 和一份空白 `.env`（`plugin install` 的 build 步骤种进去）。填 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`。Token 不要进 git。已有 `.env` 不会被覆盖。
-
-```sh
-herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
-herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5
-```
-
-`plugin action invoke` **不会**把脚本 stdout 打到终端：它立刻返回一条 JSON（`plugin_action_invoked`，`status: running`）。真正的输出在 `plugin log list` 里。Telegram 里出现 test ping 就说明通路通了。
-
-Needs Node.js 18+ and Herdr >= 0.7.0. Reinstall after pulling a new version:
 
 ```sh
 herdr plugin uninstall com.codreamer.herdr.oncall
 herdr plugin install fulanto/herdr-oncall --yes
 ```
 
-Config `.env` in `config-dir` is kept across reinstalls.
-
-If `plugin log` says `node not found`, Herdr's server PATH is not your login shell. v0.1.8 looks in nvm/fnm/mise/Homebrew and then `zsh -lic`. Reinstall, then invoke `test` again. Or start Herdr from a terminal where `command -v node` works.
-
-改插件源码时再 clone：
+Restart Herdr after install so the Telegram poller starts. Then:
 
 ```sh
-git clone https://github.com/fulanto/herdr-oncall.git
-node herdr-oncall/install.mjs
+herdr plugin config-dir com.codreamer.herdr.oncall
 ```
 
-`install.mjs` 是直接跑 Node，所以路径会打在终端上。通过 `herdr plugin action invoke setup` 跑时同样进日志。
-
-Toggle:
+Put token and chat id in `.env` there. `plugin action invoke` returns JSON immediately; real output is `plugin log list`.
 
 ```sh
-herdr plugin action invoke toggle --plugin com.codreamer.herdr.oncall
+herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
+herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5
 ```
 
-```toml
-[[keys.command]]
-key = "prefix+shift+t"
-type = "plugin_action"
-command = "com.codreamer.herdr.oncall.toggle"
-description = "toggle Oncall"
-```
+Reply in Telegram to the test ping. You should get `sent · …` or `failed · …`.
+
+Needs Node.js 18+ and Herdr >= 0.7.0. Config `.env` is kept across reinstalls.
+
+If `plugin log` says `node not found`, start Herdr from a terminal where `command -v node` works.
 
 ## Config
 
 | key | default | meaning |
 |---|---|---|
-| `CHANNEL` | `telegram` | v1 delivery path; plugin id does not change if you add `app` |
+| `CHANNEL` | `telegram` | delivery path; plugin id does not change if you add `app` |
 | `TELEGRAM_BOT_TOKEN` | required | BotFather token |
 | `TELEGRAM_CHAT_ID` | required | numeric chat; only destination |
 | `NOTIFY_ON` | `blocked,done` | comma list |
-| `BLOCKED_DELAY_SEC` | `60` | wait this long after blocked; skip if already handled. `0` = immediate |
+| `BLOCKED_DELAY_SEC` | `60` | wait after blocked; skip if already handled. `0` = immediate |
 | `DEBOUNCE_MS` | `2000` | suppress repeat pane+status |
-| `HERDR_TELEGRAM_ENABLED` | `1` | default before first toggle |
+| `TELEGRAM_POLL` | `1` | long-poll for replies |
+| `TELEGRAM_FORCE_REPLY` | `1` | force reply box on pings |
+| `HERDR_TELEGRAM_ENABLED` | `1` | outbound toggle default |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set host title while on |
 
-## What v1 will not do
+## What this plugin will not do
 
 - send pane transcript
-- accept replies
-- call `agent prompt` / `agent send-keys`
+- inline Yes / No buttons
 - ship a phone app
-
-Those sit behind this same `com.codreamer.herdr.oncall` id once the ping is reliable.
