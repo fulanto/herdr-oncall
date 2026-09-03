@@ -62,8 +62,9 @@ if (shouldDebounce(paneId, status)) {
   process.exit(0);
 }
 
-const snippet = status === "blocked" ? blockedSnippet(readPaneScreen(paneId)) : "";
-const options = status === "blocked" ? parseBlockedOptions(snippet) : [];
+const screen = status === "blocked" ? readPaneScreen(paneId) : "";
+const snippet = status === "blocked" ? blockedSnippet(screen) : "";
+const options = status === "blocked" ? parseBlockedOptions(screen) : [];
 const text = formatMessage(context, event, status, snippet);
 const messageId = await sendTelegram(token, chatId, text, {
   forceReply: status !== "blocked" || options.length === 0,

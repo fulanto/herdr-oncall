@@ -392,26 +392,41 @@ export function readPaneScreen(paneId) {
   return "";
 }
 
-export function blockedSnippet(screen, limit = 16) {
+export function blockedSnippet(screen, limit = 24) {
   const lines = stripAnsi(screen)
     .replace(/\r/g, "")
     .split("\n")
     .map((line) => line.replace(/\s+$/g, ""))
-    .filter((line) => !/^[┌┐└┘│┃─━╭╮╰╯├┤┬┴┼]+$/.test(line));
-  const nonempty = lines.filter((line) => line.trim());
-  const tail = nonempty.slice(-Math.max(4, limit));
-  let text = tail.join("\n").trim();
+    .filter((line) => line.trim() && !/^[\u2500-\u257F]+$/.test(line.trim()));
+  let start = lines.findIndex(
+    (line) =>
+      /would you like|do you want|allow |permission|environment:/i.test(line) ||
+      /^\s*\$ /.test(line) ||
+      /^\s*[^\w]*\d{1,2}[.)]/.test(line),
+  );
+  if (start < 0) {
+    start = Math.max(0, lines.length - limit);
+  }
+  let text = lines.slice(start).join("\n").trim();
   if (text.length > 3200) {
-    text = text.slice(-3200);
+    text = text.slice(0, 3200);
   }
   return text;
+}
+
+function cleanOptionLine(raw) {
+  return stripAnsi(raw)
+    .replace(/[\u2500-\u257F]/g, " ")
+    .replace(/^[^\w\d(]*?(?=\d{1,2}[.)、])/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function parseBlockedOptions(screen) {
   const options = [];
   const seen = new Set();
   for (const raw of String(screen || "").split("\n")) {
-    const line = raw.replace(/[❯▶➤]/g, " ").replace(/^\s*[>|]\s*/, "").trim();
+    const line = cleanOptionLine(raw);
     const numbered = line.match(/^(\d{1,2})[.)、]\s+(.+)$/);
     if (!numbered) {
       continue;

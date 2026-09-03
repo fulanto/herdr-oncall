@@ -141,7 +141,14 @@ Press enter to confirm or esc to cancel`;
   assert.equal(options[0].label, "Yes, proceed");
   const keyboard = optionKeyboard(options);
   assert.equal(keyboard.inline_keyboard.length, 3);
-  assert.equal(keyboard.inline_keyboard[0][0].callback_data, "y");
+  const pointed = parseBlockedOptions(`Would you like to run the following command?
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again (p)
+│ > 3. No, and tell Codex what to do differently (esc)`);
+  assert.deepEqual(
+    pointed.map((item) => item.send),
+    ["y", "p", "esc"],
+  );
   const yn = parseBlockedOptions("Allow network? [y/n]");
   assert.deepEqual(
     yn.map((item) => item.send),
