@@ -73,6 +73,7 @@ description = "toggle Oncall"
 | `TELEGRAM_BOT_TOKEN` | required | BotFather token |
 | `TELEGRAM_CHAT_ID` | required | numeric chat; only destination |
 | `NOTIFY_ON` | `blocked,done` | comma list |
+| `BLOCKED_DELAY_SEC` | `60` | wait this long after blocked; skip if already handled. `0` = immediate |
 | `DEBOUNCE_MS` | `2000` | suppress repeat pane+status |
 | `HERDR_TELEGRAM_ENABLED` | `1` | default before first toggle |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set host title while on |

@@ -46,14 +46,18 @@ export function seedConfigEnv() {
 }
 
 function upgradeEnvNotifyOn(envPath) {
-  const content = readFileSync(envPath, "utf8");
+  const original = readFileSync(envPath, "utf8");
+  let content = original;
   if (!/^NOTIFY_ON=/m.test(content)) {
-    writeFileSync(envPath, `${content.replace(/\s*$/, "")}\nNOTIFY_ON=${DEFAULT_NOTIFY_ON}\n`, "utf8");
-    return;
+    content = `${content.replace(/\s*$/, "")}\nNOTIFY_ON=${DEFAULT_NOTIFY_ON}\n`;
+  } else {
+    content = content.replace(/^NOTIFY_ON=\s*blocked\s*$/im, `NOTIFY_ON=${DEFAULT_NOTIFY_ON}`);
   }
-  const upgraded = content.replace(/^NOTIFY_ON=\s*blocked\s*$/im, `NOTIFY_ON=${DEFAULT_NOTIFY_ON}`);
-  if (upgraded !== content) {
-    writeFileSync(envPath, upgraded, "utf8");
+  if (!/^BLOCKED_DELAY_SEC=/m.test(content)) {
+    content = `${content.replace(/\s*$/, "")}\nBLOCKED_DELAY_SEC=60\n`;
+  }
+  if (content !== original) {
+    writeFileSync(envPath, content, "utf8");
   }
 }
 
@@ -252,6 +256,87 @@ export function shouldDebounce(paneId, status, now = Date.now()) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(store), "utf8");
   return false;
+}
+
+export function blockedDelayMs(raw = process.env.BLOCKED_DELAY_SEC) {
+  const sec = Number(raw ?? 60);
+  if (!Number.isFinite(sec) || sec <= 0) {
+    return 0;
+  }
+  return Math.round(sec * 1000);
+}
+
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function delayStorePath() {
+  return join(stateDir(), "blocked-delay.json");
+}
+
+function readJsonFile(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+export function markBlockedDelay(paneId, now = Date.now()) {
+  const path = delayStorePath();
+  const store = readJsonFile(path);
+  store[paneId] = now;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(store), "utf8");
+  return now;
+}
+
+export function blockedDelayStillMine(paneId, startedAt) {
+  const store = readJsonFile(delayStorePath());
+  return Number(store[paneId] ?? 0) === Number(startedAt);
+}
+
+export function extractAgentStatus(payload) {
+  const roots = [payload?.result, payload?.result?.data, payload?.data, payload].filter(Boolean);
+  for (const root of roots) {
+    const candidates = [
+      root.agent_status,
+      root.agent?.state,
+      root.agent?.status,
+      root.pane?.agent_status,
+      root.pane?.agent?.state,
+      root.status,
+    ];
+    for (const value of candidates) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim().toLowerCase();
+      }
+    }
+  }
+  return undefined;
+}
+
+export function currentPaneStatus(paneId) {
+  if (!paneId) {
+    return undefined;
+  }
+  const result = runHerdr(["pane", "get", paneId]);
+  if (result.error || result.status !== 0 || !result.stdout?.trim()) {
+    return undefined;
+  }
+  try {
+    return extractAgentStatus(JSON.parse(result.stdout));
+  } catch {
+    return undefined;
+  }
+}
+
+export function stillBlocked(paneId) {
+  const status = currentPaneStatus(paneId);
+  if (!status) {
+    return true;
+  }
+  return status === "blocked";
 }
 
 export function formatMessage(context, event, status) {

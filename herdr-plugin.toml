@@ -1,6 +1,6 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.1.9"
+version = "0.1.10"
 min_herdr_version = "0.7.0"
 description = "Host control plane: Telegram ping on blocked and done."
 platforms = ["linux", "macos", "windows"]

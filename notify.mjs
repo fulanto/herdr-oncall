@@ -1,6 +1,9 @@
 import {
+  blockedDelayMs,
+  blockedDelayStillMine,
   formatMessage,
   loadDotEnv,
+  markBlockedDelay,
   modeEnabled,
   paneIdFrom,
   readJsonEnv,
@@ -8,6 +11,8 @@ import {
   sendTelegram,
   shouldDebounce,
   shouldNotify,
+  sleep,
+  stillBlocked,
 } from "./lib.mjs";
 
 loadDotEnv();
@@ -32,6 +37,21 @@ if (!shouldNotify(status)) {
 }
 
 const paneId = paneIdFrom(event, context);
+
+if (status === "blocked") {
+  const delayMs = blockedDelayMs();
+  if (delayMs > 0) {
+    const started = markBlockedDelay(paneId);
+    await sleep(delayMs);
+    if (!blockedDelayStillMine(paneId, started)) {
+      process.exit(0);
+    }
+    if (!stillBlocked(paneId)) {
+      process.exit(0);
+    }
+  }
+}
+
 if (shouldDebounce(paneId, status)) {
   process.exit(0);
 }

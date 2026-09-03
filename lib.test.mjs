@@ -3,7 +3,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { formatMessage, notifyStatuses, seedConfigEnv, shouldNotify } from "./lib.mjs";
+import {
+  blockedDelayMs,
+  blockedDelayStillMine,
+  extractAgentStatus,
+  formatMessage,
+  markBlockedDelay,
+  notifyStatuses,
+  seedConfigEnv,
+  shouldNotify,
+} from "./lib.mjs";
 
 test("default notify list is blocked and done", () => {
   assert.deepEqual(notifyStatuses(undefined), ["blocked", "done"]);
@@ -51,12 +60,54 @@ test("seedConfigEnv copies example and a blank env into the config dir", () => {
     seedConfigEnv();
     assert.match(readFileSync(envPath, "utf8"), /TELEGRAM_BOT_TOKEN=keep/);
     assert.match(readFileSync(envPath, "utf8"), /NOTIFY_ON=blocked,done/);
+    assert.match(readFileSync(envPath, "utf8"), /BLOCKED_DELAY_SEC=60/);
     assert.match(readFileSync(join(dir, ".env.example"), "utf8"), /CHANNEL=telegram/);
   } finally {
     if (previous === undefined) {
       delete process.env.HERDR_PLUGIN_CONFIG_DIR;
     } else {
       process.env.HERDR_PLUGIN_CONFIG_DIR = previous;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("blockedDelayMs treats 0 and below as immediate", () => {
+  const previous = process.env.BLOCKED_DELAY_SEC;
+  delete process.env.BLOCKED_DELAY_SEC;
+  try {
+    assert.equal(blockedDelayMs(), 60_000);
+    assert.equal(blockedDelayMs("0"), 0);
+    assert.equal(blockedDelayMs("45"), 45_000);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.BLOCKED_DELAY_SEC;
+    } else {
+      process.env.BLOCKED_DELAY_SEC = previous;
+    }
+  }
+});
+
+test("extractAgentStatus reads herdr pane get shapes", () => {
+  assert.equal(extractAgentStatus({ result: { agent: { state: "blocked" } } }), "blocked");
+  assert.equal(extractAgentStatus({ agent_status: "done" }), "done");
+  assert.equal(extractAgentStatus({}), undefined);
+});
+
+test("a newer blocked wait supersedes an older one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oncall-state-"));
+  const previous = process.env.HERDR_PLUGIN_STATE_DIR;
+  process.env.HERDR_PLUGIN_STATE_DIR = dir;
+  try {
+    const first = markBlockedDelay("w8:p1", 1000);
+    const second = markBlockedDelay("w8:p1", 2000);
+    assert.equal(blockedDelayStillMine("w8:p1", first), false);
+    assert.equal(blockedDelayStillMine("w8:p1", second), true);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.HERDR_PLUGIN_STATE_DIR;
+    } else {
+      process.env.HERDR_PLUGIN_STATE_DIR = previous;
     }
     rmSync(dir, { recursive: true, force: true });
   }
