@@ -1,46 +1,46 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.2.3"
+version = "0.2.4"
 min_herdr_version = "0.7.0"
 description = "Host control plane: Telegram notify on blocked/done, reply into the pane."
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["/bin/bash", "run-node.sh", "seed.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/seed.mjs"]
 
 [[startup]]
-command = ["/bin/bash", "run-node.sh", "seed.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/seed.mjs"]
 
 [[actions]]
 id = "setup"
 title = "Link Oncall and seed config"
-command = ["/bin/bash", "run-node.sh", "install.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/install.mjs"]
 
 [[actions]]
 id = "poll"
 title = "Restart Telegram poller"
-command = ["/bin/bash", "run-node.sh", "start-poll.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/start-poll.mjs"]
 
 [[actions]]
 id = "toggle"
 title = "Toggle Oncall"
-command = ["/bin/bash", "run-node.sh", "toggle.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/toggle.mjs"]
 
 [[actions]]
 id = "enable"
 title = "Enable Oncall"
-command = ["/bin/bash", "run-node.sh", "toggle.mjs", "on"]
+command = ["/bin/bash", "bin/run-node.sh", "src/toggle.mjs", "on"]
 
 [[actions]]
 id = "disable"
 title = "Disable Oncall"
-command = ["/bin/bash", "run-node.sh", "toggle.mjs", "off"]
+command = ["/bin/bash", "bin/run-node.sh", "src/toggle.mjs", "off"]
 
 [[actions]]
 id = "test"
 title = "Send a test ping"
-command = ["/bin/bash", "run-node.sh", "test.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/test.mjs"]
 
 [[events]]
 on = "pane.agent_status_changed"
-command = ["/bin/bash", "run-node.sh", "notify.mjs"]
+command = ["/bin/bash", "bin/run-node.sh", "src/notify.mjs"]

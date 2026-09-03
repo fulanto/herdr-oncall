@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="${HERDR_PLUGIN_ROOT:-}"
 if [[ -z "$ROOT" ]]; then
-  ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+  ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 fi
 cd "$ROOT"
 

@@ -62,6 +62,15 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 
 ## What this plugin will not do
 
-- send pane transcript
-- inline Yes / No buttons
+- send the full pane transcript (only the blocked dialog tail)
 - ship a phone app
+
+## Layout
+
+```text
+herdr-plugin.toml   # Herdr reads this at repo root
+.env.example
+bin/run-node.sh     # Node on Herdr's PATH
+src/                # plugin
+test/
+```

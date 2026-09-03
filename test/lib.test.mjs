@@ -15,7 +15,7 @@ import {
   parseBlockedOptions,
   seedConfigEnv,
   shouldNotify,
-} from "./lib.mjs";
+} from "../src/lib.mjs";
 
 test("default notify list is blocked and done", () => {
   assert.deepEqual(notifyStatuses(undefined), ["blocked", "done"]);

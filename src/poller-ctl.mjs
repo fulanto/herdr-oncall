@@ -47,7 +47,7 @@ export function stopPoller() {
 }
 
 export function startPoller() {
-  const child = spawn("/bin/bash", [join(pluginRoot, "run-node.sh"), "poll.mjs"], {
+  const child = spawn("/bin/bash", [join(pluginRoot, "bin/run-node.sh"), "src/poll.mjs"], {
     cwd: pluginRoot,
     detached: true,
     stdio: "ignore",

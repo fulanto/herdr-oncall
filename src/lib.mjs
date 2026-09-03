@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const pluginRoot = dirname(fileURLToPath(import.meta.url));
+const here = dirname(fileURLToPath(import.meta.url));
+export const pluginRoot = process.env.HERDR_PLUGIN_ROOT || dirname(here);
 export const PLUGIN_ID = "com.codreamer.herdr.oncall";
 export const OLD_PLUGIN_IDS = ["oncall", "oncall.telegram", "fulanto.oncall"];
 
