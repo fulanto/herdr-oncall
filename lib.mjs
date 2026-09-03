@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const pluginRoot = dirname(fileURLToPath(import.meta.url));
@@ -341,14 +341,96 @@ export function stillBlocked(paneId) {
 
 export function formatMessage(context, event, status) {
   const agent = agentLabel(context, event);
-  const workspace =
-    context.workspace_label ?? event?.data?.workspace_id ?? context.workspace_id ?? "workspace";
-  const pane = paneIdFrom(event, context);
-  const tab = namedTabLabel(context.tab_label);
-  const where = [workspace, tab, pane].filter(Boolean).join(" · ");
   const line =
     status === "blocked" ? "waiting for input" : status === "done" ? "finished" : status;
-  return [`${status} · ${agent}`, where, "", line].join("\n");
+  return [`${status} · ${agent}`, formatWhere(context, event), "", line].join("\n");
+}
+
+export function formatWhere(context = {}, event = {}) {
+  const repo = repoName(context, event);
+  const space = spaceName(context, event);
+  const tab = namedTabLabel(context.tab_label ?? event?.data?.tab_label);
+  const pane = paneOrdinal(paneIdFrom(event, context));
+  const parts = [];
+  if (repo) {
+    parts.push(repo);
+  }
+  if (space && !equalsFold(space, repo)) {
+    parts.push(space);
+  }
+  if (tab) {
+    parts.push(tab);
+  }
+  if (pane) {
+    parts.push(`pane ${pane}`);
+  }
+  return parts.join(" · ") || paneIdFrom(event, context) || "workspace";
+}
+
+function repoName(context, event) {
+  const worktree = context.worktree ?? event?.data?.worktree ?? {};
+  return firstString(
+    worktree.repo_name,
+    worktree.repoName,
+    pathBasename(worktree.repo_root),
+    pathBasename(worktree.checkout_path),
+  );
+}
+
+function spaceName(context, event) {
+  const id = firstString(context.workspace_id, event?.data?.workspace_id);
+  const label = firstString(
+    context.workspace_label,
+    event?.data?.workspace_label,
+    event?.data?.workspace_name,
+  );
+  if (label && label !== id && !isOpaqueWorkspaceId(label)) {
+    return label;
+  }
+  const cwd = firstString(
+    context.workspace_cwd,
+    context.focused_pane_cwd,
+    event?.data?.cwd,
+    event?.data?.workspace_cwd,
+  );
+  const fromCwd = pathBasename(cwd);
+  if (fromCwd && fromCwd !== id && !isOpaqueWorkspaceId(fromCwd)) {
+    return fromCwd;
+  }
+  if (label && !isOpaqueWorkspaceId(label)) {
+    return label;
+  }
+  return undefined;
+}
+
+function paneOrdinal(paneId) {
+  const match = String(paneId).match(/:p([0-9A-Za-z]+)$/i);
+  return match ? match[1] : undefined;
+}
+
+function isOpaqueWorkspaceId(text) {
+  return /^w[0-9A-Za-z]{1,3}$/.test(String(text));
+}
+
+function pathBasename(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const name = basename(value.trim().replace(/[\\/]+$/, ""));
+  return name && name !== "." && name !== ".git" ? name : undefined;
+}
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function equalsFold(a, b) {
+  return String(a || "").toLowerCase() === String(b || "").toLowerCase();
 }
 
 function agentLabel(context, event) {

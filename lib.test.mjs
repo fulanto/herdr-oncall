@@ -33,15 +33,23 @@ test("formatMessage names workspace, pane, and status without emoji", () => {
     "blocked",
   );
   assert.match(text, /^blocked · Claude/m);
-  assert.match(text, /货架 · w1:p2/);
+  assert.match(text, /货架 · pane 2/);
+  assert.doesNotMatch(text, /w1:p2/);
   assert.match(text, /waiting for input/);
   assert.equal(/[\u{1F300}-\u{1FAFF}]/u.test(text), false);
   const done = formatMessage(
-    { workspace_label: "货架", focused_pane_agent: "claude" },
-    { data: { pane_id: "w1:p2", agent_status: "done", display_agent: "claude" } },
+    {
+      workspace_label: "simple",
+      workspace_id: "w8",
+      focused_pane_agent: "codex",
+      worktree: { repo_name: "asr-service" },
+    },
+    { data: { pane_id: "w8:p1", agent_status: "done", display_agent: "codex" } },
     "done",
   );
-  assert.match(done, /^done · Claude/m);
+  assert.match(done, /^done · Codex/m);
+  assert.match(done, /asr-service · simple · pane 1/);
+  assert.doesNotMatch(done, /w8:p1/);
   assert.match(done, /finished/);
 });
 
