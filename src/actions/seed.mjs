@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
-import { seedConfigEnv } from "./lib.mjs";
-import { restartPoller } from "./poller-ctl.mjs";
+import { seedConfigEnv } from "../lib/index.mjs";
+import { restartPoller } from "../inbound/poller.mjs";
 
 const envPath = seedConfigEnv();
 const pid = restartPoller();

@@ -1,12 +1,12 @@
-import { loadDotEnv, seedConfigEnv, sleep } from "./lib.mjs";
-import { writePollerPid } from "./poller-ctl.mjs";
+import { loadDotEnv, seedConfigEnv, sleep } from "../lib/index.mjs";
+import { writePollerPid } from "../inbound/poller.mjs";
 import {
   handleTelegramUpdate,
   pollEnabled,
   readOffset,
   telegramGetUpdates,
   writeOffset,
-} from "./reply.mjs";
+} from "../inbound/reply.mjs";
 
 seedConfigEnv();
 loadDotEnv();

@@ -4,7 +4,7 @@ import {
   modePath,
   setMode,
   setWindowTitleIndicator,
-} from "./lib.mjs";
+} from "../lib/index.mjs";
 
 loadDotEnv();
 

@@ -68,9 +68,12 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 ## Layout
 
 ```text
-herdr-plugin.toml   # Herdr reads this at repo root
+herdr-plugin.toml
 .env.example
-bin/run-node.sh     # Node on Herdr's PATH
-src/                # plugin
+bin/run-node.sh
+src/lib/        # shared
+src/hooks/      # notify + telegram poller
+src/inbound/    # replies / pane delivery
+src/actions/    # setup, test, toggle, poll
 test/
 ```

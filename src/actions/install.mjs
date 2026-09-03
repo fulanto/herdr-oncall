@@ -1,5 +1,5 @@
-import { OLD_PLUGIN_IDS, PLUGIN_ID, pluginRoot, runHerdr, seedConfigEnv } from "./lib.mjs";
-import { restartPoller } from "./poller-ctl.mjs";
+import { OLD_PLUGIN_IDS, PLUGIN_ID, pluginRoot, runHerdr, seedConfigEnv } from "../lib/index.mjs";
+import { restartPoller } from "../inbound/poller.mjs";
 
 const alreadyLinked = process.env.HERDR_PLUGIN_ID === PLUGIN_ID;
 

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pluginRoot, stateDir } from "./lib.mjs";
+import { pluginRoot, stateDir } from "../lib/index.mjs";
 
 function pidPath() {
   return join(stateDir(), "poller.pid");
@@ -47,7 +47,7 @@ export function stopPoller() {
 }
 
 export function startPoller() {
-  const child = spawn("/bin/bash", [join(pluginRoot, "bin/run-node.sh"), "src/poll.mjs"], {
+  const child = spawn("/bin/bash", [join(pluginRoot, "bin/run-node.sh"), "src/hooks/poll.mjs"], {
     cwd: pluginRoot,
     detached: true,
     stdio: "ignore",

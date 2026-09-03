@@ -1,4 +1,4 @@
-import { formatMessage, loadDotEnv, seedConfigEnv, sendTelegram } from "./lib.mjs";
+import { formatMessage, loadDotEnv, seedConfigEnv, sendTelegram } from "../lib/index.mjs";
 
 loadDotEnv();
 

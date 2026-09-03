@@ -18,9 +18,9 @@ import {
   shouldNotify,
   sleep,
   stillBlocked,
-} from "./lib.mjs";
-import { rememberOutbound } from "./reply.mjs";
-import { ensurePoller } from "./poller-ctl.mjs";
+} from "../lib/index.mjs";
+import { rememberOutbound } from "../inbound/reply.mjs";
+import { ensurePoller } from "../inbound/poller.mjs";
 
 loadDotEnv();
 ensurePoller();

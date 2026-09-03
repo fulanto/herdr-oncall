@@ -6,7 +6,7 @@ import {
   runHerdr,
   sendTelegram,
   stateDir,
-} from "./lib.mjs";
+} from "../lib/index.mjs";
 
 const OUTBOUND_TTL_MS = 24 * 60 * 60 * 1000;
 const NAMED_KEYS = {

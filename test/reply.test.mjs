@@ -10,7 +10,7 @@ import {
   namedReplyKey,
   rememberOutbound,
   resolveReplyTarget,
-} from "../src/reply.mjs";
+} from "../src/inbound/reply.mjs";
 
 test("blocked replies become keys or typed enter", () => {
   assert.deepEqual(classifyDelivery("blocked", "esc"), { mode: "keys", keys: ["esc"] });
