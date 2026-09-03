@@ -6,10 +6,13 @@ import test from "node:test";
 import {
   blockedDelayMs,
   blockedDelayStillMine,
+  blockedSnippet,
   extractAgentStatus,
   formatMessage,
   markBlockedDelay,
   notifyStatuses,
+  optionKeyboard,
+  parseBlockedOptions,
   seedConfigEnv,
   shouldNotify,
 } from "./lib.mjs";
@@ -36,6 +39,7 @@ test("formatMessage names workspace, pane, and status without emoji", () => {
   assert.match(text, /货架 · pane 2/);
   assert.doesNotMatch(text, /w1:p2/);
   assert.match(text, /waiting for input/);
+  assert.match(text, /tap a button/);
   assert.equal(/[\u{1F300}-\u{1FAFF}]/u.test(text), false);
   const done = formatMessage(
     {
@@ -119,4 +123,35 @@ test("a newer blocked wait supersedes an older one", () => {
     }
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("parseBlockedOptions reads Codex permission dialogs", () => {
+  const screen = `Would you like to run the following command?
+Environment: local
+$ rm -rf -- /tmp/draft
+> 1. Yes, proceed (y)
+2. Yes, and don't ask again for commands that start with \`rm -rf -- /tmp/draft\` (p)
+3. No, and tell Codex what to do differently (esc)
+Press enter to confirm or esc to cancel`;
+  const options = parseBlockedOptions(screen);
+  assert.deepEqual(
+    options.map((item) => item.send),
+    ["y", "p", "esc"],
+  );
+  assert.equal(options[0].label, "Yes, proceed");
+  const keyboard = optionKeyboard(options);
+  assert.equal(keyboard.inline_keyboard.length, 3);
+  assert.equal(keyboard.inline_keyboard[0][0].callback_data, "y");
+  const yn = parseBlockedOptions("Allow network? [y/n]");
+  assert.deepEqual(
+    yn.map((item) => item.send),
+    ["y", "n"],
+  );
+});
+
+test("blockedSnippet keeps the tail of the screen", () => {
+  const screen = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
+  const text = blockedSnippet(screen, 5);
+  assert.match(text, /line 30/);
+  assert.doesNotMatch(text, /line 1\n/);
 });

@@ -1,13 +1,17 @@
 import {
   blockedDelayMs,
   blockedDelayStillMine,
+  blockedSnippet,
   formatMessage,
   formatWhere,
   loadDotEnv,
   markBlockedDelay,
   modeEnabled,
+  optionKeyboard,
   paneIdFrom,
+  parseBlockedOptions,
   readJsonEnv,
+  readPaneScreen,
   resolveStatus,
   sendTelegram,
   shouldDebounce,
@@ -58,8 +62,13 @@ if (shouldDebounce(paneId, status)) {
   process.exit(0);
 }
 
-const text = formatMessage(context, event, status);
-const messageId = await sendTelegram(token, chatId, text);
+const snippet = status === "blocked" ? blockedSnippet(readPaneScreen(paneId)) : "";
+const options = status === "blocked" ? parseBlockedOptions(snippet) : [];
+const text = formatMessage(context, event, status, snippet);
+const messageId = await sendTelegram(token, chatId, text, {
+  forceReply: status !== "blocked" || options.length === 0,
+  replyMarkup: optionKeyboard(options),
+});
 rememberOutbound({
   messageId,
   paneId,

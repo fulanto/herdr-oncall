@@ -339,11 +339,156 @@ export function stillBlocked(paneId) {
   return status === "blocked";
 }
 
-export function formatMessage(context, event, status) {
+export function extractReadText(payload) {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  const roots = [payload?.result, payload?.result?.data, payload].filter(Boolean);
+  for (const root of roots) {
+    if (typeof root === "string") {
+      return root;
+    }
+    for (const key of ["content", "text", "output", "screen", "value"]) {
+      if (typeof root[key] === "string") {
+        return root[key];
+      }
+    }
+    if (Array.isArray(root.lines)) {
+      return root.lines.map((line) => (typeof line === "string" ? line : line?.text ?? "")).join("\n");
+    }
+  }
+  return "";
+}
+
+export function stripAnsi(text) {
+  return String(text ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+}
+
+export function readPaneScreen(paneId) {
+  if (!paneId) {
+    return "";
+  }
+  for (const args of [
+    ["pane", "read", paneId, "--source", "visible", "--format", "text"],
+    ["pane", "read", paneId, "--source", "detection"],
+    ["agent", "read", paneId, "--source", "visible", "--format", "text"],
+  ]) {
+    const result = runHerdr(args);
+    if (result.error || result.status !== 0 || !result.stdout?.trim()) {
+      continue;
+    }
+    try {
+      const text = stripAnsi(extractReadText(JSON.parse(result.stdout))).trim();
+      if (text) {
+        return text;
+      }
+    } catch {
+      const text = stripAnsi(result.stdout).trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return "";
+}
+
+export function blockedSnippet(screen, limit = 16) {
+  const lines = stripAnsi(screen)
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/g, ""))
+    .filter((line) => !/^[┌┐└┘│┃─━╭╮╰╯├┤┬┴┼]+$/.test(line));
+  const nonempty = lines.filter((line) => line.trim());
+  const tail = nonempty.slice(-Math.max(4, limit));
+  let text = tail.join("\n").trim();
+  if (text.length > 3200) {
+    text = text.slice(-3200);
+  }
+  return text;
+}
+
+export function parseBlockedOptions(screen) {
+  const options = [];
+  const seen = new Set();
+  for (const raw of String(screen || "").split("\n")) {
+    const line = raw.replace(/[❯▶➤]/g, " ").replace(/^\s*[>|]\s*/, "").trim();
+    const numbered = line.match(/^(\d{1,2})[.)、]\s+(.+)$/);
+    if (!numbered) {
+      continue;
+    }
+    const index = numbered[1];
+    let rest = numbered[2].replace(/\s+/g, " ").trim();
+    let shortcut;
+    const trailing = rest.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (trailing) {
+      rest = trailing[1].trim();
+      shortcut = normalizeShortcut(trailing[2]);
+    }
+    const send = shortcut || index;
+    if (seen.has(send) || seen.has(`i:${index}`)) {
+      continue;
+    }
+    seen.add(send);
+    seen.add(`i:${index}`);
+    options.push({ key: index, send, label: rest.slice(0, 56) });
+  }
+  if (options.length) {
+    return options.slice(0, 8);
+  }
+  if (/\b\[?y\/n\]?\b/i.test(screen) || /\(y\/n\)/i.test(screen)) {
+    return [
+      { key: "y", send: "y", label: "yes" },
+      { key: "n", send: "n", label: "no" },
+    ];
+  }
+  return [];
+}
+
+function normalizeShortcut(raw) {
+  const text = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (!text) {
+    return undefined;
+  }
+  if (text === "escape") {
+    return "esc";
+  }
+  if (text === "return") {
+    return "enter";
+  }
+  if (/^[a-z0-9]+$/.test(text) && text.length <= 8) {
+    return text;
+  }
+  if (text === "esc" || text === "enter" || text === "tab") {
+    return text;
+  }
+  return undefined;
+}
+
+export function optionKeyboard(options) {
+  if (!options?.length) {
+    return undefined;
+  }
+  return {
+    inline_keyboard: options.map((option) => [
+      {
+        text: `${option.key}. ${option.label}`.slice(0, 64),
+        callback_data: String(option.send || option.key).slice(0, 32),
+      },
+    ]),
+  };
+}
+
+export function formatMessage(context, event, status, snippet) {
   const agent = agentLabel(context, event);
-  const line =
-    status === "blocked" ? "waiting for input" : status === "done" ? "finished" : status;
-  return [`${status} · ${agent}`, formatWhere(context, event), "", line].join("\n");
+  const where = formatWhere(context, event);
+  if (status === "blocked") {
+    const body = snippet || "waiting for input";
+    return [`${status} · ${agent}`, where, "", body, "", "tap a button, or type another answer"].join("\n");
+  }
+  const line = status === "done" ? "finished" : status;
+  return [`${status} · ${agent}`, where, "", line].join("\n");
 }
 
 export function formatWhere(context = {}, event = {}) {
@@ -466,7 +611,9 @@ export async function sendTelegram(token, chatId, text, options = {}) {
     disable_web_page_preview: true,
   };
   const forceReply = options.forceReply ?? envFlag("TELEGRAM_FORCE_REPLY", true);
-  if (forceReply) {
+  if (options.replyMarkup) {
+    payload.reply_markup = options.replyMarkup;
+  } else if (forceReply) {
     payload.reply_markup = { force_reply: true, selective: true };
   }
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

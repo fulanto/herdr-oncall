@@ -14,9 +14,10 @@ import {
 
 test("blocked replies become keys or typed enter", () => {
   assert.deepEqual(classifyDelivery("blocked", "esc"), { mode: "keys", keys: ["esc"] });
+  assert.deepEqual(classifyDelivery("blocked", "y"), { mode: "keys", keys: ["y"] });
+  assert.deepEqual(classifyDelivery("blocked", "p"), { mode: "keys", keys: ["p"] });
   assert.deepEqual(classifyDelivery("blocked", "Enter"), { mode: "keys", keys: ["enter"] });
-  assert.deepEqual(classifyDelivery("blocked", "1"), { mode: "text-enter" });
-  assert.deepEqual(classifyDelivery("blocked", "yes, continue"), { mode: "text-enter" });
+  assert.deepEqual(classifyDelivery("blocked", "don't delete that"), { mode: "text-enter" });
 });
 
 test("done and idle replies are new prompts", () => {

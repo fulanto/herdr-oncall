@@ -25,7 +25,13 @@ export function namedReplyKey(text) {
   const key = String(text || "")
     .trim()
     .toLowerCase();
-  return NAMED_KEYS[key];
+  if (NAMED_KEYS[key]) {
+    return NAMED_KEYS[key];
+  }
+  if (/^[a-z0-9]$/.test(key)) {
+    return key;
+  }
+  return undefined;
 }
 
 export function classifyDelivery(liveStatus, text) {
@@ -177,7 +183,7 @@ export async function telegramGetUpdates(token, offset) {
     url.searchParams.set("offset", String(offset));
   }
   url.searchParams.set("timeout", "25");
-  url.searchParams.set("allowed_updates", JSON.stringify(["message"]));
+  url.searchParams.set("allowed_updates", JSON.stringify(["message", "callback_query"]));
   const response = await fetch(url, { signal: AbortSignal.timeout(35_000) });
   const json = await response.json();
   if (!json.ok) {
@@ -187,6 +193,9 @@ export async function telegramGetUpdates(token, offset) {
 }
 
 export async function handleTelegramUpdate(update, { token, chatId }) {
+  if (update?.callback_query) {
+    return handleCallback(update.callback_query, { token, chatId });
+  }
   const message = update?.message;
   if (!message?.text) {
     return { skipped: "no-text" };
@@ -200,7 +209,7 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
       await sendTelegram(
         token,
         chatId,
-        "Reply to an oncall ping. Blocked → keys into the dialog. Done/idle → new prompt.",
+        "Blocked: tap a choice or type one. Done: send a new instruction.",
         { forceReply: false },
       );
     }
@@ -211,6 +220,28 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
     await sendTelegram(token, chatId, "Reply to a ping so I know which pane.", { forceReply: false });
     return { skipped: "no-target" };
   }
+  return finishDelivery(target, text, { token, chatId });
+}
+
+async function handleCallback(query, { token, chatId }) {
+  const chat = query?.message?.chat?.id;
+  if (String(chat) !== String(chatId)) {
+    return { skipped: "chat" };
+  }
+  const text = String(query?.data || "").trim();
+  if (!text) {
+    return { skipped: "no-data" };
+  }
+  const target =
+    lookupOutbound(query?.message?.message_id) || lastOutbound();
+  await answerCallbackQuery(token, query.id, target?.paneId ? "sending" : "no pane");
+  if (!target?.paneId) {
+    return { skipped: "no-target" };
+  }
+  return finishDelivery(target, text, { token, chatId });
+}
+
+async function finishDelivery(target, text, { token, chatId }) {
   const result = deliverReply(target.paneId, text, target.status);
   const ok = !herdrFailed(result);
   const ack = ok
@@ -218,6 +249,17 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
     : `failed · ${target.where || target.paneId}\n${herdrErrorText(result)}`;
   await sendTelegram(token, chatId, ack, { forceReply: false });
   return { ok, paneId: target.paneId, mode: classifyDelivery(target.status, text).mode };
+}
+
+async function answerCallbackQuery(token, id, text) {
+  if (!id) {
+    return;
+  }
+  await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ callback_query_id: id, text, show_alert: false }),
+  }).catch(() => {});
 }
 
 export function pollEnabled() {

@@ -6,7 +6,7 @@ Telegram is only the first channel. If notify + reply work, a thin app talks to 
 
 **v2:** ping Telegram on `blocked` / `done`. Reply to that ping to send input into the pane.
 
-- still `blocked` → type into the dialog (`pane send-text` + Enter, or `esc` / `enter` as keys)
+- still `blocked` → ping includes the dialog tail and a button per option (Codex `y` / `p` / `esc`). Tap the button; type only if you need an answer that is not in the list
 - `done` / `idle` / `working` → `agent prompt` (new instruction)
 - only your `TELEGRAM_CHAT_ID` is accepted
 - a message that is not a reply goes to the last pinged pane
