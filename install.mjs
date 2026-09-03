@@ -1,4 +1,5 @@
 import { OLD_PLUGIN_IDS, PLUGIN_ID, pluginRoot, runHerdr, seedConfigEnv } from "./lib.mjs";
+import { restartPoller } from "./poller-ctl.mjs";
 
 const alreadyLinked = process.env.HERDR_PLUGIN_ID === PLUGIN_ID;
 
@@ -20,7 +21,10 @@ if (!alreadyLinked) {
 }
 
 const envPath = seedConfigEnv();
+const pid = restartPoller();
 console.log(`plugin: ${PLUGIN_ID}`);
 console.log(`config: ${envPath}`);
+console.log(`poller: ${pid}`);
 console.log("fill TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, then:");
 console.log(`  herdr plugin action invoke test --plugin ${PLUGIN_ID}`);
+

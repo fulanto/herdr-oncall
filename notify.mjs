@@ -20,8 +20,10 @@ import {
   stillBlocked,
 } from "./lib.mjs";
 import { rememberOutbound } from "./reply.mjs";
+import { ensurePoller } from "./poller-ctl.mjs";
 
 loadDotEnv();
+ensurePoller();
 if (!modeEnabled()) {
   process.exit(0);
 }

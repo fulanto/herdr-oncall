@@ -1,6 +1,6 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.2.2"
+version = "0.2.3"
 min_herdr_version = "0.7.0"
 description = "Host control plane: Telegram notify on blocked/done, reply into the pane."
 platforms = ["linux", "macos", "windows"]
@@ -11,13 +11,15 @@ command = ["/bin/bash", "run-node.sh", "seed.mjs"]
 [[startup]]
 command = ["/bin/bash", "run-node.sh", "seed.mjs"]
 
-[[startup]]
-command = ["/bin/bash", "run-node.sh", "poll.mjs"]
-
 [[actions]]
 id = "setup"
 title = "Link Oncall and seed config"
 command = ["/bin/bash", "run-node.sh", "install.mjs"]
+
+[[actions]]
+id = "poll"
+title = "Restart Telegram poller"
+command = ["/bin/bash", "run-node.sh", "start-poll.mjs"]
 
 [[actions]]
 id = "toggle"

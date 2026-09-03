@@ -20,7 +20,13 @@ herdr plugin uninstall com.codreamer.herdr.oncall
 herdr plugin install fulanto/herdr-oncall --yes
 ```
 
-Restart Herdr after install so the Telegram poller starts. Then:
+Install runs `seed.mjs`, which starts the Telegram poller — no Herdr restart. To force it:
+
+```sh
+herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
+```
+
+Then:
 
 ```sh
 herdr plugin config-dir com.codreamer.herdr.oncall

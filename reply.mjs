@@ -224,18 +224,20 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
 }
 
 async function handleCallback(query, { token, chatId }) {
-  const chat = query?.message?.chat?.id;
-  if (String(chat) !== String(chatId)) {
+  const chat = query?.message?.chat?.id ?? query?.from?.id;
+  if (chat !== undefined && String(chat) !== String(chatId) && String(query?.from?.id) !== String(chatId)) {
+    console.log(`callback chat mismatch got=${chat} want=${chatId}`);
     return { skipped: "chat" };
   }
   const text = String(query?.data || "").trim();
   if (!text) {
     return { skipped: "no-data" };
   }
-  const target =
-    lookupOutbound(query?.message?.message_id) || lastOutbound();
+  const target = lookupOutbound(query?.message?.message_id) || lastOutbound();
+  console.log(`callback data=${text} pane=${target?.paneId || "none"}`);
   await answerCallbackQuery(token, query.id, target?.paneId ? "sending" : "no pane");
   if (!target?.paneId) {
+    await sendTelegram(token, chatId, "no pane mapped for that button", { forceReply: false });
     return { skipped: "no-target" };
   }
   return finishDelivery(target, text, { token, chatId });

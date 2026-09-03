@@ -1,4 +1,5 @@
 import { loadDotEnv, seedConfigEnv, sleep } from "./lib.mjs";
+import { writePollerPid } from "./poller-ctl.mjs";
 import {
   handleTelegramUpdate,
   pollEnabled,
@@ -9,7 +10,8 @@ import {
 
 seedConfigEnv();
 loadDotEnv();
-console.log("oncall poller started");
+writePollerPid(process.pid);
+console.log(`oncall poller started pid=${process.pid}`);
 
 while (true) {
   loadDotEnv();
@@ -23,10 +25,15 @@ while (true) {
     const updates = await telegramGetUpdates(token, readOffset());
     for (const update of updates) {
       writeOffset(Number(update.update_id) + 1);
-      await handleTelegramUpdate(update, { token, chatId });
+      const result = await handleTelegramUpdate(update, { token, chatId });
+      if (result && !result.skipped) {
+        console.log(JSON.stringify(result));
+      } else if (result?.skipped && result.skipped !== "no-text") {
+        console.log(`skip ${result.skipped}`);
+      }
     }
   } catch (error) {
     console.error(error?.message || error);
-    await sleep(4000);
+    await sleep(error?.message?.includes("Conflict") ? 8000 : 4000);
   }
 }
