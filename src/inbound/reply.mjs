@@ -1,11 +1,15 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  consumePairCode,
   currentPaneStatus,
   envFlag,
+  extractStartPayload,
+  pendingPair,
   runHerdr,
   sendTelegram,
   stateDir,
+  upsertEnvValue,
 } from "../lib/index.mjs";
 
 const OUTBOUND_TTL_MS = 24 * 60 * 60 * 1000;
@@ -200,12 +204,16 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
   if (!message?.text) {
     return { skipped: "no-text" };
   }
-  if (String(message.chat?.id) !== String(chatId)) {
+  const text = message.text.trim();
+  const paired = await maybePair(message, text, token);
+  if (paired) {
+    return paired;
+  }
+  if (!chatId || String(message.chat?.id) !== String(chatId)) {
     return { skipped: "chat" };
   }
-  const text = message.text.trim();
   if (!text || text.startsWith("/")) {
-    if (text === "/start" || text === "/help") {
+    if (text === "/start" || text.startsWith("/start@") || text === "/help") {
       await sendTelegram(
         token,
         chatId,
@@ -221,6 +229,30 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
     return { skipped: "no-target" };
   }
   return finishDelivery(target, text, { token, chatId });
+}
+
+async function maybePair(message, text, token) {
+  const looksLikePair = Boolean(extractStartPayload(text)) || Boolean(pendingPair() && /^[A-Z0-9]{6,12}$/i.test(text));
+  if (!looksLikePair) {
+    return undefined;
+  }
+  const result = consumePairCode(text);
+  const chat = message.chat?.id;
+  if (!result.ok) {
+    if (chat && result.reason !== "no-pending") {
+      await sendTelegram(token, chat, "pair code mismatch or expired. run pair on the host again.", {
+        forceReply: false,
+      });
+    }
+    return { skipped: `pair-${result.reason}` };
+  }
+  if (!chat) {
+    return { skipped: "pair-no-chat" };
+  }
+  const envPath = upsertEnvValue("TELEGRAM_CHAT_ID", chat);
+  await sendTelegram(token, chat, "paired · this machine will send oncall here", { forceReply: false });
+  console.log(`paired chat=${chat} env=${envPath}`);
+  return { ok: true, paired: String(chat) };
 }
 
 async function handleCallback(query, { token, chatId }) {
