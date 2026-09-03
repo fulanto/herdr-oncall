@@ -30,6 +30,8 @@ export function configDirPath() {
   return join(configHome, "herdr", "plugins", "config", PLUGIN_ID);
 }
 
+export const DEFAULT_NOTIFY_ON = "blocked,done";
+
 export function seedConfigEnv() {
   const dir = configDirPath();
   mkdirSync(dir, { recursive: true });
@@ -39,7 +41,20 @@ export function seedConfigEnv() {
   if (!existsSync(dest)) {
     copyFileSync(src, dest);
   }
+  upgradeEnvNotifyOn(dest);
   return dest;
+}
+
+function upgradeEnvNotifyOn(envPath) {
+  const content = readFileSync(envPath, "utf8");
+  if (!/^NOTIFY_ON=/m.test(content)) {
+    writeFileSync(envPath, `${content.replace(/\s*$/, "")}\nNOTIFY_ON=${DEFAULT_NOTIFY_ON}\n`, "utf8");
+    return;
+  }
+  const upgraded = content.replace(/^NOTIFY_ON=\s*blocked\s*$/im, `NOTIFY_ON=${DEFAULT_NOTIFY_ON}`);
+  if (upgraded !== content) {
+    writeFileSync(envPath, upgraded, "utf8");
+  }
 }
 
 export function loadDotEnv(path) {
@@ -166,12 +181,12 @@ export function readJsonEnv(name) {
 }
 
 export function notifyStatuses(raw = process.env.NOTIFY_ON) {
-  const text = String(raw ?? "blocked");
+  const text = String(raw ?? DEFAULT_NOTIFY_ON);
   const list = text
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
-  return list.length ? list : ["blocked"];
+  return list.length ? list : DEFAULT_NOTIFY_ON.split(",");
 }
 
 export function statusFromEvent(event) {
@@ -246,7 +261,8 @@ export function formatMessage(context, event, status) {
   const pane = paneIdFrom(event, context);
   const tab = namedTabLabel(context.tab_label);
   const where = [workspace, tab, pane].filter(Boolean).join(" · ");
-  const line = status === "blocked" ? "waiting for input" : status;
+  const line =
+    status === "blocked" ? "waiting for input" : status === "done" ? "finished" : status;
   return [`${status} · ${agent}`, where, "", line].join("\n");
 }
 
