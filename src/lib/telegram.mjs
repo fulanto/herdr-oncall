@@ -1,5 +1,16 @@
 import { envFlag } from "./config.mjs";
 
+export async function telegramGetMe(token) {
+  const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+    signal: AbortSignal.timeout(15_000),
+  });
+  const json = await response.json();
+  if (!json.ok) {
+    throw new Error(json.description || "telegram getMe failed");
+  }
+  return json.result;
+}
+
 export async function sendTelegram(token, chatId, text, options = {}) {
   const payload = {
     chat_id: chatId,

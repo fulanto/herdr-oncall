@@ -1,6 +1,6 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.2.5"
+version = "0.3.0"
 min_herdr_version = "0.7.0"
 description = "Host control plane: Telegram notify on blocked/done, reply into the pane."
 platforms = ["linux", "macos", "windows"]
@@ -35,6 +35,11 @@ command = ["/bin/bash", "bin/run-node.sh", "src/actions/toggle.mjs", "on"]
 id = "disable"
 title = "Disable Oncall"
 command = ["/bin/bash", "bin/run-node.sh", "src/actions/toggle.mjs", "off"]
+
+[[actions]]
+id = "pair"
+title = "Pair Telegram chat"
+command = ["/bin/bash", "bin/run-node.sh", "src/actions/pair.mjs"]
 
 [[actions]]
 id = "test"

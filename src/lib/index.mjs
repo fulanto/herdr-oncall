@@ -4,3 +4,4 @@ export * from "./herdr.mjs";
 export * from "./format.mjs";
 export * from "./gate.mjs";
 export * from "./telegram.mjs";
+export * from "./pair.mjs";

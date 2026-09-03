@@ -17,7 +17,7 @@ while (true) {
   loadDotEnv();
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
   const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
-  if (!token || !chatId || !pollEnabled()) {
+  if (!token || !pollEnabled()) {
     await sleep(8000);
     continue;
   }
