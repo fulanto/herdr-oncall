@@ -77,3 +77,9 @@ src/inbound/    # replies / pane delivery
 src/actions/    # setup, test, toggle, poll
 test/
 ```
+
+## License
+
+MIT © 2026 fulanto. See [LICENSE](LICENSE).
+
+`fulanto` is the copyright holder. `com.codreamer.herdr.oncall` is the product id (and the namespace for a later app). They are not the same thing; do not rename the copyright to Codreamer until that name is a legal entity that should own the plugin.
