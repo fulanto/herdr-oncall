@@ -26,13 +26,22 @@ Install runs `seed.mjs`, which starts the Telegram poller — no Herdr restart. 
 herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
 ```
 
-Then:
+Then put the bot token in that config dir and pair the chat:
 
 ```sh
 herdr plugin config-dir com.codreamer.herdr.oncall
 ```
 
-Put token and chat id in `.env` there. `plugin action invoke` returns JSON immediately; real output is `plugin log list`.
+Edit `.env` there: `TELEGRAM_BOT_TOKEN=…`. Leave `TELEGRAM_CHAT_ID` empty if you want pairing.
+
+```sh
+herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
+herdr plugin action invoke pair --plugin com.codreamer.herdr.oncall
+```
+
+Open the printed `t.me/…?start=…` link on your phone (or send `/start CODE` to the bot). The poller writes `TELEGRAM_CHAT_ID`. `qrencode` on PATH prints a terminal QR.
+
+`plugin action invoke` returns JSON immediately; real output is `plugin log list`.
 
 ```sh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
@@ -51,7 +60,7 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 |---|---|---|
 | `CHANNEL` | `telegram` | delivery path; plugin id does not change if you add `app` |
 | `TELEGRAM_BOT_TOKEN` | required | BotFather token |
-| `TELEGRAM_CHAT_ID` | required | numeric chat; only destination |
+| `TELEGRAM_CHAT_ID` | pair or manual | numeric chat; only destination |
 | `NOTIFY_ON` | `blocked,done` | comma list |
 | `BLOCKED_DELAY_SEC` | `60` | wait after blocked; skip if already handled. `0` = immediate |
 | `DEBOUNCE_MS` | `2000` | suppress repeat pane+status |
@@ -74,7 +83,7 @@ bin/run-node.sh
 src/lib/        # shared
 src/hooks/      # notify + telegram poller
 src/inbound/    # replies / pane delivery
-src/actions/    # setup, test, toggle, poll
+src/actions/    # setup, pair, test, toggle, poll
 test/
 ```
 
