@@ -39,7 +39,7 @@ herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
 herdr plugin action invoke pair --plugin com.codreamer.herdr.oncall
 ```
 
-Open the printed `t.me/…?start=…` link on your phone (or send `/start CODE` to the bot). The poller writes `TELEGRAM_CHAT_ID`. `qrencode` on PATH prints a terminal QR.
+Open the printed `t.me/…?start=…` link on your phone (or send `/start CODE` to the bot). The poller writes `TELEGRAM_CHAT_ID`. Plugin installation installs `qrencode` automatically with Homebrew on macOS and a supported system package manager on Linux, then prints a terminal QR. Linux installation needs root or passwordless `sudo` when `qrencode` is not already installed.
 
 `plugin action invoke` returns JSON immediately; real output is `plugin log list`.
 

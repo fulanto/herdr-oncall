@@ -38,10 +38,9 @@ save_cache() {
   printf '%s\n' "$1" > "$CACHE"
 }
 
-if NODE="$(cached_node)"; then
-  exec "$NODE" "$@"
-fi
-
+# Herdr's server may have a minimal PATH. Add common executable locations
+# before using the cached Node path so child tools such as qrencode remain
+# discoverable on every action invocation.
 prepend_path /opt/homebrew/bin
 prepend_path /usr/local/bin
 prepend_path "$HOME/.local/bin"
@@ -50,6 +49,10 @@ prepend_path "$HOME/.asdf/shims"
 prepend_path "$HOME/.nodenv/shims"
 prepend_path "$HOME/.local/share/mise/shims"
 prepend_path "$HOME/.mise/shims"
+
+if NODE="$(cached_node)"; then
+  exec "$NODE" "$@"
+fi
 
 if ! have_node; then
   for dir in "$HOME/.nvm/versions/node/"*/bin "$HOME/.config/nvm/versions/node/"*/bin; do

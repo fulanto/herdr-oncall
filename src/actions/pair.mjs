@@ -49,5 +49,8 @@ function printQr(url) {
   const printed = spawnSync("qrencode", ["-t", "ANSIUTF8", url], { encoding: "utf8" });
   if (printed.status === 0 && printed.stdout?.trim()) {
     console.log(printed.stdout);
+    return;
   }
+  const detail = printed.error?.message || printed.stderr?.trim() || `exit ${printed.status}`;
+  console.error(`qrencode failed: ${detail}`);
 }
