@@ -47,6 +47,11 @@ export function extractReadText(payload) {
   if (typeof payload === "string") {
     return payload;
   }
+  const nested =
+    payload?.result?.read?.text ?? payload?.read?.text ?? payload?.result?.data?.read?.text;
+  if (typeof nested === "string" && nested.trim()) {
+    return nested;
+  }
   const roots = [payload?.result, payload?.result?.data, payload].filter(Boolean);
   for (const root of roots) {
     if (typeof root === "string") {
@@ -68,15 +73,24 @@ export function stripAnsi(text) {
   return String(text ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 }
 
-export function readPaneScreen(paneId) {
+export function readPaneScreen(paneId, options = {}) {
   if (!paneId) {
     return "";
   }
-  for (const args of [
-    ["pane", "read", paneId, "--source", "visible", "--format", "text"],
-    ["pane", "read", paneId, "--source", "detection"],
-    ["agent", "read", paneId, "--source", "visible", "--format", "text"],
-  ]) {
+  const recent = Boolean(options.recent);
+  const attempts = recent
+    ? [
+        ["pane", "read", paneId, "--source", "recent-unwrapped", "--lines", "120", "--format", "text"],
+        ["agent", "read", paneId, "--source", "recent-unwrapped", "--lines", "120", "--format", "text"],
+        ["pane", "read", paneId, "--source", "recent", "--lines", "120", "--format", "text"],
+        ["pane", "read", paneId, "--source", "visible", "--format", "text"],
+      ]
+    : [
+        ["pane", "read", paneId, "--source", "visible", "--format", "text"],
+        ["pane", "read", paneId, "--source", "detection"],
+        ["agent", "read", paneId, "--source", "visible", "--format", "text"],
+      ];
+  for (const args of attempts) {
     const result = runHerdr(args);
     if (result.error || result.status !== 0 || !result.stdout?.trim()) {
       continue;

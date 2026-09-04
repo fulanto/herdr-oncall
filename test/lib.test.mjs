@@ -7,7 +7,9 @@ import {
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
+  doneSnippet,
   extractAgentStatus,
+  extractReadText,
   formatMessage,
   markBlockedDelay,
   notifyStatuses,
@@ -55,6 +57,46 @@ test("formatMessage names workspace, pane, and status without emoji", () => {
   assert.match(done, /asr-service · simple · pane 1/);
   assert.doesNotMatch(done, /w8:p1/);
   assert.match(done, /finished/);
+});
+
+test("formatMessage done includes the last assistant turn", () => {
+  const text = formatMessage(
+    {
+      workspace_label: "simple",
+      focused_pane_agent: "codex",
+      worktree: { repo_name: "asr-service" },
+    },
+    { data: { pane_id: "w8:p1", agent_status: "done", display_agent: "codex" } },
+    "done",
+    "The debounce is in place.",
+  );
+  assert.match(text, /^done · Codex/m);
+  assert.match(text, /The debounce is in place\./);
+  assert.doesNotMatch(text, /^finished$/m);
+});
+
+test("doneSnippet keeps the last assistant turn", () => {
+  const screen = `exploring files
+❯ add a 60s blocked delay
+I'll add BLOCKED_DELAY_SEC and skip the ping if you already answered.
+Done. Blocked pings now wait 60s.
+12345 tokens
+esc to interrupt
+›
+`;
+  const text = doneSnippet(screen);
+  assert.match(text, /BLOCKED_DELAY_SEC/);
+  assert.match(text, /wait 60s/);
+  assert.doesNotMatch(text, /add a 60s blocked delay/);
+  assert.doesNotMatch(text, /tokens/);
+  assert.doesNotMatch(text, /^›$/m);
+});
+
+test("extractReadText prefers result.read.text", () => {
+  assert.equal(
+    extractReadText({ result: { read: { text: "last turn" }, text: "no" } }),
+    "last turn",
+  );
 });
 
 test("seedConfigEnv copies example and a blank env into the config dir", () => {

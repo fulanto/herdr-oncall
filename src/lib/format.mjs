@@ -12,11 +12,7 @@ export function paneIdFrom(event, context) {
 }
 
 export function blockedSnippet(screen, limit = 24) {
-  const lines = stripAnsi(screen)
-    .replace(/\r/g, "")
-    .split("\n")
-    .map((line) => line.replace(/\s+$/g, ""))
-    .filter((line) => line.trim() && !/^[\u2500-\u257F]+$/.test(line.trim()));
+  const lines = screenLines(screen);
   let start = lines.findIndex(
     (line) =>
       /would you like|do you want|allow |permission|environment:/i.test(line) ||
@@ -26,11 +22,82 @@ export function blockedSnippet(screen, limit = 24) {
   if (start < 0) {
     start = Math.max(0, lines.length - limit);
   }
-  let text = lines.slice(start).join("\n").trim();
-  if (text.length > 3200) {
-    text = text.slice(0, 3200);
+  return capSnippet(lines.slice(start).join("\n").trim());
+}
+
+export function doneSnippet(screen, limit = 40) {
+  const lines = screenLines(screen).filter((line) => !isChromeLine(line));
+  if (!lines.length) {
+    return "";
   }
-  return text;
+  let userIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (isUserMarker(lines[i])) {
+      userIdx = i;
+    }
+  }
+  let body = userIdx >= 0 && userIdx < lines.length - 1 ? lines.slice(userIdx + 1) : lines.slice(-limit);
+  while (body.length && (isUserMarker(body.at(-1)) || isChromeLine(body.at(-1)))) {
+    body.pop();
+  }
+  if (body.length > limit) {
+    body = body.slice(-limit);
+  }
+  return capSnippet(body.join("\n").trim());
+}
+
+function screenLines(screen) {
+  return stripAnsi(screen)
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/g, ""))
+    .filter((line) => line.trim() && !/^[\u2500-\u257F]+$/.test(line.trim()));
+}
+
+function isChromeLine(line) {
+  const text = line.trim();
+  if (!text) {
+    return true;
+  }
+  if (/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷•·●○]+$/.test(text)) {
+    return true;
+  }
+  if (/^(idle|done|finished|working|blocked|thinking|ready)\b/i.test(text) && text.length < 24) {
+    return true;
+  }
+  if (
+    /\b(tokens?|context window|esc to |press (enter|esc)|ctrl\+|interrupt|shift\+tab)\b/i.test(text) &&
+    text.length < 96
+  ) {
+    return true;
+  }
+  if (/^[❯›▸$]\s*$/.test(text) || /^codex>\s*$/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function isUserMarker(line) {
+  const text = line.trim();
+  if (/^(you|user|human)\s*[:：]/i.test(text)) {
+    return true;
+  }
+  if (/^[❯›▸]\s+\S/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function capSnippet(text) {
+  if (text.length <= 3200) {
+    return text;
+  }
+  let slice = text.slice(-3200);
+  const nl = slice.indexOf("\n");
+  if (nl > 0 && nl < 200) {
+    slice = slice.slice(nl + 1);
+  }
+  return slice.trim();
 }
 
 function cleanOptionLine(raw) {
@@ -121,8 +188,10 @@ export function formatMessage(context, event, status, snippet) {
     const body = snippet || "waiting for input";
     return [`${status} · ${agent}`, where, "", body, "", "tap a button, or type another answer"].join("\n");
   }
-  const line = status === "done" ? "finished" : status;
-  return [`${status} · ${agent}`, where, "", line].join("\n");
+  if (status === "done" || status === "finish") {
+    return [`${status} · ${agent}`, where, "", snippet || "finished"].join("\n");
+  }
+  return [`${status} · ${agent}`, where, "", status].join("\n");
 }
 
 export function formatWhere(context = {}, event = {}) {

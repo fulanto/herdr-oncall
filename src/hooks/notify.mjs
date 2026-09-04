@@ -2,6 +2,7 @@ import {
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
+  doneSnippet,
   formatMessage,
   formatWhere,
   loadDotEnv,
@@ -64,8 +65,18 @@ if (shouldDebounce(paneId, status)) {
   process.exit(0);
 }
 
-const screen = status === "blocked" ? readPaneScreen(paneId) : "";
-const snippet = status === "blocked" ? blockedSnippet(screen) : "";
+const screen =
+  status === "blocked"
+    ? readPaneScreen(paneId)
+    : status === "done" || status === "finish"
+      ? readPaneScreen(paneId, { recent: true })
+      : "";
+const snippet =
+  status === "blocked"
+    ? blockedSnippet(screen)
+    : status === "done" || status === "finish"
+      ? doneSnippet(screen)
+      : "";
 const options = status === "blocked" ? parseBlockedOptions(screen) : [];
 const text = formatMessage(context, event, status, snippet);
 const messageId = await sendTelegram(token, chatId, text, {

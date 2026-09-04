@@ -7,7 +7,7 @@ Telegram is only the first channel. If notify + reply work, a thin app talks to 
 **v2:** ping Telegram on `blocked` / `done`. Reply to that ping to send input into the pane.
 
 - still `blocked` → ping includes the dialog tail and a button per option (Codex `y` / `p` / `esc`). Tap the button; type only if you need an answer that is not in the list
-- `done` / `idle` / `working` → `agent prompt` (new instruction)
+- `done` → ping includes the last assistant turn (not the full transcript). Reply with a new instruction
 - only your `TELEGRAM_CHAT_ID` is accepted
 - a message that is not a reply goes to the last pinged pane
 
@@ -71,7 +71,7 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 
 ## What this plugin will not do
 
-- send the full pane transcript (only the blocked dialog tail)
+- send the full pane transcript (blocked: dialog tail; done: last assistant turn)
 - ship a phone app
 
 ## Layout
