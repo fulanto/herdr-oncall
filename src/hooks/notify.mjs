@@ -2,6 +2,7 @@ import {
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
+  currentPaneStatus,
   doneSnippet,
   formatMessage,
   formatWhere,
@@ -23,6 +24,7 @@ import {
   sleep,
   statusTitle,
   stillBlocked,
+  userAtPane,
 } from "../lib/index.mjs";
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
 import { ensurePoller } from "../inbound/poller.mjs";
@@ -79,9 +81,39 @@ function deliverFromPanel(text) {
   console.log(`panel sent · ${where}`);
 }
 
+// The pane moved on without us: the user answered in the Herdr UI
+// (blocked → anything else) or gave the agent new work (done → busy).
+function paneMovedOn() {
+  const live = currentPaneStatus(paneId);
+  if (!live) {
+    return false;
+  }
+  if (status === "blocked") {
+    return live !== "blocked";
+  }
+  return live === "working" || live === "blocked";
+}
+
+// Reasons to close an open panel, polled while it is up.
+function panelShouldClose() {
+  if (paneMovedOn()) {
+    return "moved-on";
+  }
+  if (userAtPane(paneId)) {
+    return "at-pane";
+  }
+  return false;
+}
+
+// Returns "handled" | "resolved" | "at-pane" | "superseded" | "unavailable" |
+// "timeout" | "dismiss" | "skipped".
 async function runPanel({ options, body, timeoutMs }) {
+  if (userAtPane(paneId)) {
+    console.log(`panel skipped · ${where} · pane is on screen`);
+    return "skipped";
+  }
   console.log(`panel · ${title} · ${where}`);
-  const result = await showPanel({ paneId, title, where, body, options, timeoutMs });
+  const result = await showPanel({ paneId, title, where, body, options, timeoutMs, until: panelShouldClose });
   if (result.kind === "button") {
     const option = options[result.index];
     deliverFromPanel(option?.send ?? String(result.index + 1));
@@ -90,6 +122,10 @@ async function runPanel({ options, body, timeoutMs }) {
   if (result.kind === "text") {
     deliverFromPanel(result.text);
     return "handled";
+  }
+  if (result.kind === "resolved") {
+    console.log(`panel closed · ${where} · ${result.reason}`);
+    return result.reason === "at-pane" ? "at-pane" : "resolved";
   }
   return result.kind;
 }
@@ -112,7 +148,8 @@ if (status === "blocked") {
   const delayMs = blockedDelayMs();
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
-    // time out and fall through to Telegram.
+    // time out and fall through to Telegram. If the user is (or arrives) at
+    // the pane, the rest of the wait runs silently and Telegram still follows.
     if (shouldDebounce(paneId, "panel:blocked")) {
       process.exit(0);
     }
@@ -123,11 +160,14 @@ if (status === "blocked") {
       body: blockedSnippet(screen),
       timeoutMs: delayMs,
     });
-    if (outcome === "handled" || outcome === "superseded") {
+    if (outcome === "handled" || outcome === "superseded" || outcome === "resolved") {
       process.exit(0);
     }
-    if (outcome === "unavailable") {
-      await sleep(delayMs);
+    if (outcome === "unavailable" || outcome === "skipped" || outcome === "at-pane") {
+      const remaining = delayMs - (Date.now() - started);
+      if (remaining > 0) {
+        await sleep(remaining);
+      }
     }
     if (!blockedDelayStillMine(paneId, started) || !stillBlocked(paneId)) {
       process.exit(0);

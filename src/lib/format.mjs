@@ -14,16 +14,76 @@ export function paneIdFrom(event, context) {
 
 export function blockedSnippet(screen, limit = 24) {
   const lines = screenLines(screen);
-  let start = lines.findIndex(
+  const header = dialogHeaderIndex(lines);
+  let start;
+  let end = lines.length;
+  if (header < 0) {
+    start = Math.max(0, lines.length - limit);
+  } else {
+    start = dialogStartIndex(lines, header);
+    end = dialogEndIndex(lines, header);
+  }
+  return capSnippet(lines.slice(start, end).join("\n").trim());
+}
+
+// The line that asks the question. Prefer the last question-shaped line so
+// earlier prose that merely mentions "permission" does not win.
+function dialogHeaderIndex(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/(would you like|do you want|allow|permission)[^?]*\?/i.test(lines[i])) {
+      return i;
+    }
+  }
+  return lines.findIndex(
     (line) =>
       /would you like|do you want|allow |permission|environment:/i.test(line) ||
       /^\s*\$ /.test(line) ||
       /^\s*[^\w]*\d{1,2}[.)]/.test(line),
   );
-  if (start < 0) {
-    start = Math.max(0, lines.length - limit);
+}
+
+// Claude Code prints the tool call and its arguments above the question and
+// the options right under it; Codex prints the question first and the command
+// under it. When options follow the question immediately, the content that
+// needs approving is above: walk up to it, through the "⏺ Tool(...)" line.
+function dialogStartIndex(lines, header, maxAbove = 14) {
+  const next = lines[header + 1];
+  if (!next || !isOptionLine(next)) {
+    return header;
   }
-  return capSnippet(lines.slice(start).join("\n").trim());
+  let start = header;
+  let taken = 0;
+  while (start > 0 && taken < maxAbove) {
+    const prev = lines[start - 1];
+    if (isChromeLine(prev) || isUserMarker(prev)) {
+      break;
+    }
+    start--;
+    taken++;
+    if (/^\s*[⏺●]\s+\S/.test(prev)) {
+      break;
+    }
+  }
+  return start;
+}
+
+function isOptionLine(line) {
+  return /^\s*[❯›▸>]?\s*\d{1,2}[.)、]\s+\S/.test(cleanOptionLine(line));
+}
+
+// Stop after the options, before the spinner, prompt box, or status line that
+// the visible screen carries below the dialog.
+function dialogEndIndex(lines, header) {
+  for (let i = header + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (isOptionLine(line)) {
+      continue;
+    }
+    if (isChromeLine(line) || isUserMarker(line)) {
+      return i;
+    }
+  }
+  return lines.length;
 }
 
 export function doneSnippet(screen, limit = 40) {

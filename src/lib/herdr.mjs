@@ -43,6 +43,33 @@ export function stillBlocked(paneId) {
   return status === "blocked";
 }
 
+export function extractPaneFocused(payload) {
+  const roots = [payload?.result?.pane, payload?.result, payload?.pane, payload].filter(Boolean);
+  for (const root of roots) {
+    if (typeof root.focused === "boolean") {
+      return root.focused;
+    }
+  }
+  return undefined;
+}
+
+// True when this pane is the focused pane of the focused workspace in Herdr.
+// Undefined when Herdr could not tell us.
+export function paneFocused(paneId) {
+  if (!paneId) {
+    return undefined;
+  }
+  const result = runHerdr(["pane", "get", paneId]);
+  if (result.error || result.status !== 0 || !result.stdout?.trim()) {
+    return undefined;
+  }
+  try {
+    return extractPaneFocused(JSON.parse(result.stdout));
+  } catch {
+    return undefined;
+  }
+}
+
 export function extractReadText(payload) {
   if (typeof payload === "string") {
     return payload;

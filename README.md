@@ -12,7 +12,7 @@ Telegram is only the first channel. If notify + reply work, a thin app talks to 
 - a message that is not a reply goes to the last pinged pane
 - the location line names the repo, the worktree and its branch when the pane runs in a linked worktree, the tab, and the pane
 
-**v0.4, macOS:** a desktop panel comes first. On `blocked` a floating window opens in the top-right corner of the screen you are on (it follows you across Spaces) with the dialog tail, one button per option, and a text field. Enter picks option 1, Cmd+N picks option N, typing sends that text. Answer there and no Telegram ping is sent. Let it time out (`BLOCKED_DELAY_SEC`) and Telegram takes over. On `done` the panel shows the last turn with a field for the next instruction; Telegram is pinged at the same time.
+**v0.4, macOS:** a desktop panel comes first. On `blocked` a floating window opens in the top-right corner of the screen you are on (it follows you across Spaces) with the tool call and dialog, one button per option, and a text field. Enter picks option 1, Cmd+N picks option N, typing sends that text. Answer there and no Telegram ping is sent. Let it time out (`BLOCKED_DELAY_SEC`) and Telegram takes over. On `done` the panel shows the last turn with a field for the next instruction; Telegram is pinged at the same time. The panel stays out of the way when you are already looking at the pane (Herdr's focused pane, terminal in front), and closes by itself once the pane is answered in Herdr or you switch to it.
 
 Derived from [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify).
 
@@ -75,6 +75,7 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set host title while on |
 | `DESKTOP_PANEL` | `1` | macOS floating panel before Telegram; `0` = off |
 | `DESKTOP_PANEL_TIMEOUT_SEC` | `BLOCKED_DELAY_SEC` | how long the panel stays open (60 when the delay is 0) |
+| `DESKTOP_PANEL_TERMINALS` | empty | extra terminal bundle ids that count as "you are at the pane" |
 
 ## What this plugin will not do
 

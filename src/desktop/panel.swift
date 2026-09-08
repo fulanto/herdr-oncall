@@ -54,7 +54,7 @@ let width: CGFloat = 440
 let pad: CGFloat = 12
 let rowH: CGFloat = 28
 let rowGap: CGFloat = 4
-let bodyLines = max(3, min(14, body.split(separator: "\n", omittingEmptySubsequences: false).count))
+let bodyLines = max(3, min(18, body.split(separator: "\n", omittingEmptySubsequences: false).count))
 let bodyH = CGFloat(bodyLines) * 15 + 8
 let optionsH = CGFloat(options.count) * (rowH + rowGap)
 let height = pad + 20 + 2 + 16 + 8 + bodyH + 8 + optionsH + 4 + 26 + pad
@@ -112,7 +112,8 @@ scroll.hasVerticalScroller = true
 scroll.drawsBackground = false
 scroll.borderType = .bezelBorder
 content.addSubview(scroll)
-text.scrollToEndOfDocument(nil)
+// Stay at the top: the content that needs approving comes first, the options
+// are repeated as buttons below.
 
 y -= 8
 for (index, label) in options.enumerated() {

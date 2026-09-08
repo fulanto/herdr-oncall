@@ -204,3 +204,45 @@ test("blockedSnippet keeps the tail of the screen", () => {
   assert.match(text, /line 30/);
   assert.doesNotMatch(text, /line 1\n/);
 });
+
+test("blockedSnippet includes the tool call above a Claude Code question", () => {
+  const screen = `⏺ I need to check the pid file, this may need permission.
+  Some earlier prose that mentions permission and allow lists.
+
+❯ read the pid file
+
+⏺ Bash(cat ~/.local/state/herdr/plugins/oncall/poller.pid)
+  ⎿  Read the poller pid file
+
+  Do you want to proceed?
+  ❯ 1. Yes
+    2. Yes, allow reading from /Users/me/.local/state/herdr from this project
+    3. Yes, and switch to auto mode · auto mode handles these prompts for you
+    4. No
+✶ Thinking… (12s · ↓ 1.2k tokens)`;
+  const text = blockedSnippet(screen);
+  assert.match(text, /^⏺ Bash\(cat/m);
+  assert.match(text, /Read the poller pid file/);
+  assert.match(text, /Do you want to proceed\?/);
+  assert.match(text, /4\. No/);
+  assert.doesNotMatch(text, /earlier prose/);
+  assert.doesNotMatch(text, /read the pid file$/m);
+  assert.doesNotMatch(text, /Thinking/);
+  const options = parseBlockedOptions(screen);
+  assert.deepEqual(
+    options.map((item) => item.send),
+    ["1", "2", "3", "4"],
+  );
+});
+
+test("blockedSnippet keeps Codex dialogs starting at the question", () => {
+  const screen = `Some assistant output above.
+Would you like to run the following command?
+Environment: local
+$ rm -rf -- /tmp/draft
+> 1. Yes, proceed (y)
+2. No (esc)`;
+  const text = blockedSnippet(screen);
+  assert.match(text, /^Would you like to run/);
+  assert.doesNotMatch(text, /assistant output above/);
+});

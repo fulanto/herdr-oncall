@@ -50,12 +50,12 @@ Tests isolate themselves by pointing these two env vars at `mkdtempSync` dirs; f
 
 `resolveStatus` → `resolveWorktree` (fills `context.worktree` from `herdr workspace get` and the branch from `herdr worktree list --workspace` when the event did not carry them) → then:
 
-- **blocked, panel available, `BLOCKED_DELAY_SEC` > 0**: `showPanel` replaces the wait. A button or typed text goes straight into the pane via `deliverReply` and the hook exits without Telegram. Timeout or Esc falls through to the checks below and then Telegram. A newer blocked event for the same pane kills the older panel (`panels.json`) and the older hook exits as `superseded`.
+- **blocked, panel available, `BLOCKED_DELAY_SEC` > 0**: `showPanel` replaces the wait. A button or typed text goes straight into the pane via `deliverReply` and the hook exits without Telegram. Timeout or Esc falls through to the checks below and then Telegram. While the panel is up, `until` is polled every 2s: the pane leaving `blocked` (answered in Herdr) closes it and the hook exits; the user arriving at the pane (`userAtPane`: Herdr focused pane + terminal app frontmost via `lsappinfo`) closes it and the remaining delay runs silently before Telegram. The panel is not opened at all when the user is already at the pane. A newer blocked event for the same pane kills the older panel (`panels.json`) and the older hook exits as `superseded`.
 - **blocked otherwise**: wait `BLOCKED_DELAY_SEC`, then bail unless this pane's delay is still ours (`blockedDelayStillMine`) **and** `herdr pane get` still says blocked.
 - Telegram send: `shouldDebounce` → `readPaneScreen` (`herdr pane read`; `recent-unwrapped` source for done, `visible` for blocked) → `blockedSnippet`/`doneSnippet` + `parseBlockedOptions` (`src/lib/format.mjs`) → `sendTelegram` (inline keyboard for blocked options, else force-reply) → `rememberOutbound(messageId → paneId)`.
 - **done**: Telegram is pinged first, then the panel opens with the last turn and a text field; typed text becomes a new prompt.
 
-The panel binary speaks a one-line stdout protocol (`button:<i>` / `text:<t>` / `timeout` / `dismiss`), parsed by `parsePanelResult` in `src/lib/desktop.mjs`. Panel debounce uses the keys `panel:blocked` / `panel:done` so it does not interfere with the Telegram debounce.
+The panel binary speaks a one-line stdout protocol (`button:<i>` / `text:<t>` / `timeout` / `dismiss`), parsed by `parsePanelResult` in `src/lib/desktop.mjs`. Panel debounce uses the keys `panel:blocked` / `panel:done` so it does not interfere with the Telegram debounce. `blockedSnippet` handles two dialog shapes: Claude Code puts the `⏺ Tool(...)` line and arguments **above** "Do you want to proceed?" with options right under it, Codex puts the question first and the command under it; it walks up to the tool line in the first case and cuts the tail at the first chrome/prompt line after the options in both.
 
 ### Inbound flow (reply.mjs)
 
