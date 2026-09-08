@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-STATE="${HERDR_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr-oncall}"
 
 # Herdr's server/build environment may not inherit a login-shell PATH.
 refresh_path() {
@@ -86,12 +85,14 @@ ensure_qrencode() {
 
 # macOS desktop panel: a floating window with one button per blocked option.
 # Optional. Needs Xcode Command Line Tools for swiftc. Skipped elsewhere.
+# The binary lives next to this script because Herdr's build step does not set
+# HERDR_PLUGIN_STATE_DIR while events and actions do.
 build_panel() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     return 0
   fi
   local src="$ROOT/src/desktop/panel.swift"
-  local out="$STATE/oncall-panel"
+  local out="$ROOT/bin/oncall-panel"
   if [[ -x "$out" && "$out" -nt "$src" ]]; then
     echo "panel: $out (up to date)"
     return 0
@@ -100,7 +101,6 @@ build_panel() {
     echo "swiftc not found; desktop panel disabled. Install Xcode Command Line Tools (xcode-select --install) and reinstall to enable it." >&2
     return 0
   fi
-  mkdir -p "$STATE"
   echo "panel: compiling $src (this takes a while the first time)"
   if swiftc -O -o "$out" "$src"; then
     echo "panel: $out"

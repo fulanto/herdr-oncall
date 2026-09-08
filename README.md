@@ -55,7 +55,7 @@ Reply in Telegram to the test ping. You should get `sent · …` or `failed · �
 
 Needs Node.js 18+ and Herdr >= 0.7.0. Config `.env` is kept across reinstalls.
 
-The desktop panel needs Xcode Command Line Tools (`xcode-select --install`). Install compiles `src/desktop/panel.swift` once into the state dir (`~/.local/state/herdr-oncall/oncall-panel`); without `swiftc` the panel is skipped and Telegram still works.
+The desktop panel needs Xcode Command Line Tools (`xcode-select --install`). Install compiles `src/desktop/panel.swift` once into `bin/oncall-panel` inside the plugin directory; without `swiftc` the panel is skipped and Telegram still works.
 
 If `plugin log` says `node not found`, start Herdr from a terminal where `command -v node` works.
 

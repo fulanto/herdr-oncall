@@ -2,13 +2,16 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { envFlag } from "./config.mjs";
-import { stateDir } from "./paths.mjs";
+import { pluginRoot, stateDir } from "./paths.mjs";
 import { blockedDelayMs } from "./gate.mjs";
 
 export const PANEL_BINARY = "oncall-panel";
 
+// Compiled by bin/install-deps.sh into the plugin root. Herdr's build step does
+// not set HERDR_PLUGIN_STATE_DIR while events and actions do, so the state dir
+// is not a stable meeting point; the plugin root is known to both.
 export function panelBinaryPath() {
-  return join(stateDir(), PANEL_BINARY);
+  return join(pluginRoot, "bin", PANEL_BINARY);
 }
 
 export function panelEnabled() {

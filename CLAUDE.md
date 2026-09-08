@@ -17,7 +17,7 @@ node --test test/pair.test.mjs
 node --test --test-name-pattern="pairDeepLink" test/pair.test.mjs
 ```
 
-There is no lint or build step for the JS. The macOS panel is compiled by `bin/install-deps.sh` (Herdr's `[[build]]` step) with `swiftc` into `<state>/oncall-panel`; to rebuild after editing `panel.swift`, run `bash bin/install-deps.sh` (about a minute). Live testing goes through the Herdr CLI (see README): `herdr plugin action invoke <setup|poll|pair|test|toggle|enable|disable> --plugin com.codreamer.herdr.oncall`, then `herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5` for real output (`action invoke` only returns JSON immediately). `bash install.sh` links the checkout into Herdr for local development.
+There is no lint or build step for the JS. The macOS panel is compiled by `bin/install-deps.sh` (Herdr's `[[build]]` step) with `swiftc` into `bin/oncall-panel` (git-ignored); to rebuild after editing `panel.swift`, run `bash bin/install-deps.sh` (about a minute). It lives in the plugin root rather than the state dir because Herdr sets `HERDR_PLUGIN_STATE_DIR` for events and actions but **not** for build commands, so anything the build writes to "the state dir" lands somewhere the hooks never look. Live testing goes through the Herdr CLI (see README): `herdr plugin action invoke <setup|poll|pair|test|toggle|enable|disable> --plugin com.codreamer.herdr.oncall`, then `herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5` for real output (`action invoke` only returns JSON immediately). `bash install.sh` links the checkout into Herdr for local development.
 
 To exercise the notify hook by hand without pinging Telegram, run it with an empty token and a short delay against a real pane:
 
@@ -42,7 +42,7 @@ Three kinds of process share `src/lib`:
 ### Two on-disk directories (never confuse them)
 
 - **Config dir** — where `.env` lives. Resolved by `configDirPath()` in `src/lib/paths.mjs`: `HERDR_PLUGIN_CONFIG_DIR` → `herdr plugin config-dir <id>` → XDG fallback. `seedConfigEnv()` copies `.env.example` there and non-destructively upgrades missing keys (`NOTIFY_ON`, `BLOCKED_DELAY_SEC`). `.env` survives reinstalls.
-- **State dir** — `HERDR_PLUGIN_STATE_DIR` → `~/.local/state/herdr-oncall`. Holds runtime files: `enabled` (toggle), `last-notify.json` (debounce), `blocked-delay.json` (delayed-ping ownership), `outbound.json` (Telegram message_id → pane map, 24h TTL), `telegram-offset`, `poller.pid`, `pair.json`, `panels.json` (pane → open panel pid), `node-path`, and the compiled `oncall-panel` binary.
+- **State dir** — `HERDR_PLUGIN_STATE_DIR` → `~/.local/state/herdr-oncall`. Holds runtime files: `enabled` (toggle), `last-notify.json` (debounce), `blocked-delay.json` (delayed-ping ownership), `outbound.json` (Telegram message_id → pane map, 24h TTL), `telegram-offset`, `poller.pid`, `pair.json`, `panels.json` (pane → open panel pid), `node-path`. In practice Herdr passes `~/.local/state/herdr/plugins/<id>` to events and actions and nothing to build commands, so build-time and runtime processes see different state dirs.
 
 Tests isolate themselves by pointing these two env vars at `mkdtempSync` dirs; follow that pattern for any new test that touches disk.
 
