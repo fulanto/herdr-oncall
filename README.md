@@ -10,6 +10,9 @@ Telegram is only the first channel. If notify + reply work, a thin app talks to 
 - `done` → ping includes the last assistant turn (not the full transcript). Reply with a new instruction
 - only your `TELEGRAM_CHAT_ID` is accepted
 - a message that is not a reply goes to the last pinged pane
+- the location line names the repo, the worktree and its branch when the pane runs in a linked worktree, the tab, and the pane
+
+**v0.4, macOS:** a desktop panel comes first. On `blocked` a floating window opens in the top-right corner of the screen you are on (it follows you across Spaces) with the dialog tail, one button per option, and a text field. Enter picks option 1, Cmd+N picks option N, typing sends that text. Answer there and no Telegram ping is sent. Let it time out (`BLOCKED_DELAY_SEC`) and Telegram takes over. On `done` the panel shows the last turn with a field for the next instruction; Telegram is pinged at the same time.
 
 Derived from [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify).
 
@@ -52,6 +55,8 @@ Reply in Telegram to the test ping. You should get `sent · …` or `failed · �
 
 Needs Node.js 18+ and Herdr >= 0.7.0. Config `.env` is kept across reinstalls.
 
+The desktop panel needs Xcode Command Line Tools (`xcode-select --install`). Install compiles `src/desktop/panel.swift` once into the state dir (`~/.local/state/herdr-oncall/oncall-panel`); without `swiftc` the panel is skipped and Telegram still works.
+
 If `plugin log` says `node not found`, start Herdr from a terminal where `command -v node` works.
 
 ## Config
@@ -68,11 +73,14 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 | `TELEGRAM_FORCE_REPLY` | `1` | force reply box on pings |
 | `HERDR_TELEGRAM_ENABLED` | `1` | outbound toggle default |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set host title while on |
+| `DESKTOP_PANEL` | `1` | macOS floating panel before Telegram; `0` = off |
+| `DESKTOP_PANEL_TIMEOUT_SEC` | `BLOCKED_DELAY_SEC` | how long the panel stays open (60 when the delay is 0) |
 
 ## What this plugin will not do
 
 - send the full pane transcript (blocked: dialog tail; done: last assistant turn)
 - ship a phone app
+- show a system notification banner with buttons: macOS only allows that for a signed app bundle, so the panel is a plain floating window instead
 
 ## Layout
 
@@ -80,6 +88,8 @@ If `plugin log` says `node not found`, start Herdr from a terminal where `comman
 herdr-plugin.toml
 .env.example
 bin/run-node.sh
+bin/install-deps.sh   # qrencode + compiles the panel
+src/desktop/    # panel.swift, macOS floating panel
 src/lib/        # shared
 src/hooks/      # notify + telegram poller
 src/inbound/    # replies / pane delivery

@@ -5,3 +5,5 @@ export * from "./format.mjs";
 export * from "./gate.mjs";
 export * from "./telegram.mjs";
 export * from "./pair.mjs";
+export * from "./worktree.mjs";
+export * from "./desktop.mjs";

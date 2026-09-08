@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { stripAnsi } from "./herdr.mjs";
+import { worktreeFrom, worktreeLabel, worktreeName } from "./worktree.mjs";
 
 export function paneIdFrom(event, context) {
   const raw =
@@ -182,20 +183,27 @@ export function optionKeyboard(options) {
 }
 
 export function formatMessage(context, event, status, snippet) {
-  const agent = agentLabel(context, event);
+  const head = statusTitle(context, event, status);
   const where = formatWhere(context, event);
   if (status === "blocked") {
     const body = snippet || "waiting for input";
-    return [`${status} · ${agent}`, where, "", body, "", "tap a button, or type another answer"].join("\n");
+    return [head, where, "", body, "", "tap a button, or type another answer"].join("\n");
   }
   if (status === "done" || status === "finish") {
-    return [`${status} · ${agent}`, where, "", snippet || "finished"].join("\n");
+    return [head, where, "", snippet || "finished"].join("\n");
   }
-  return [`${status} · ${agent}`, where, "", status].join("\n");
+  return [head, where, "", status].join("\n");
+}
+
+export function statusTitle(context = {}, event = {}, status = "") {
+  return `${status} · ${agentLabel(context, event)}`;
 }
 
 export function formatWhere(context = {}, event = {}) {
   const repo = repoName(context, event);
+  const worktree = worktreeFrom(context, event);
+  const worktreeText = worktreeLabel(worktree);
+  const worktreeShort = worktreeName(worktree);
   const space = spaceName(context, event);
   const tab = namedTabLabel(context.tab_label ?? event?.data?.tab_label);
   const pane = paneOrdinal(paneIdFrom(event, context));
@@ -203,7 +211,10 @@ export function formatWhere(context = {}, event = {}) {
   if (repo) {
     parts.push(repo);
   }
-  if (space && !equalsFold(space, repo)) {
+  if (worktreeText) {
+    parts.push(worktreeText);
+  }
+  if (space && !equalsFold(space, repo) && !equalsFold(space, worktreeShort)) {
     parts.push(space);
   }
   if (tab) {

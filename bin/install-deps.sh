@@ -1,18 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-# Herdr's server/build environment may not inherit a login-shell PATH.
-for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
-  if [[ -d "$dir" ]]; then
-    PATH="$dir:$PATH"
-  fi
-done
-export PATH
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+STATE="${HERDR_PLUGIN_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/herdr-oncall}"
 
-if command -v qrencode >/dev/null 2>&1; then
-  echo "qrencode: $(command -v qrencode)"
-  exit 0
-fi
+# Herdr's server/build environment may not inherit a login-shell PATH.
+refresh_path() {
+  for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+    if [[ -d "$dir" ]]; then
+      PATH="$dir:$PATH"
+    fi
+  done
+  export PATH
+}
+refresh_path
 
 install_macos() {
   local brew_bin=""
@@ -62,26 +63,52 @@ install_linux() {
   fi
 }
 
-case "$(uname -s)" in
-  Darwin) install_macos ;;
-  Linux) install_linux ;;
-  *)
-    echo "Automatic qrencode installation is not supported on this platform." >&2
-    exit 1
-    ;;
-esac
-
-# Refresh common paths after package installation.
-for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
-  if [[ -d "$dir" ]]; then
-    PATH="$dir:$PATH"
+ensure_qrencode() {
+  if command -v qrencode >/dev/null 2>&1; then
+    echo "qrencode: $(command -v qrencode)"
+    return 0
   fi
-done
-export PATH
+  case "$(uname -s)" in
+    Darwin) install_macos ;;
+    Linux) install_linux ;;
+    *)
+      echo "Automatic qrencode installation is not supported on this platform." >&2
+      return 1
+      ;;
+  esac
+  refresh_path
+  if ! command -v qrencode >/dev/null 2>&1; then
+    echo "qrencode installation completed but the executable is still unavailable." >&2
+    return 1
+  fi
+  echo "qrencode installed: $(command -v qrencode)"
+}
 
-if ! command -v qrencode >/dev/null 2>&1; then
-  echo "qrencode installation completed but the executable is still unavailable." >&2
-  exit 1
-fi
+# macOS desktop panel: a floating window with one button per blocked option.
+# Optional. Needs Xcode Command Line Tools for swiftc. Skipped elsewhere.
+build_panel() {
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+  local src="$ROOT/src/desktop/panel.swift"
+  local out="$STATE/oncall-panel"
+  if [[ -x "$out" && "$out" -nt "$src" ]]; then
+    echo "panel: $out (up to date)"
+    return 0
+  fi
+  if ! command -v swiftc >/dev/null 2>&1; then
+    echo "swiftc not found; desktop panel disabled. Install Xcode Command Line Tools (xcode-select --install) and reinstall to enable it." >&2
+    return 0
+  fi
+  mkdir -p "$STATE"
+  echo "panel: compiling $src (this takes a while the first time)"
+  if swiftc -O -o "$out" "$src"; then
+    echo "panel: $out"
+  else
+    echo "panel: compile failed; desktop panel disabled, Telegram still works." >&2
+    rm -f "$out"
+  fi
+}
 
-echo "qrencode installed: $(command -v qrencode)"
+ensure_qrencode
+build_panel
