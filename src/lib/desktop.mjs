@@ -107,7 +107,7 @@ export function parsePanelResult(stdout) {
 }
 
 export function panelLabels(options = []) {
-  return options.map((option) => `${option.key}. ${option.label}`.slice(0, 80));
+  return options.map((option) => `${option.key}. ${option.label}`.slice(0, 96));
 }
 
 function panelPidsPath() {

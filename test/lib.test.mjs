@@ -198,6 +198,54 @@ Press enter to confirm or esc to cancel`;
   );
 });
 
+test("options come only from the dialog, not from earlier numbered chat lines", () => {
+  const screen = `❯ 1. 毫秒时间戳存时不要上。懒得去跑数据库迁移了
+  2. 用子 agent 使用 opus 5 去跑翻译回填脚本
+  3. 如果适用 v2 那就移植，如果不适用 v2，那就删。
+
+⏺ Bash command · from the general-purpose agent
+  Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+
+    cd /Users/me/Git-Repo/trizen-doctor && node -e '
+    const fs=require("fs");
+    const L=["zh","en","ja","de","ar","ko"];
+    '
+  Dump memory/errorKind/terminalReason groups
+
+  This command requires approval
+
+  Do you want to proceed?
+  › 1. Yes
+    2. Yes, and don't ask again for: node -e ' *
+    3. Yes, and switch to auto mode · auto mode handles these prompts for you
+    4. No
+
+  Esc to cancel · Tab to amend`;
+
+  const options = parseBlockedOptions(screen);
+  assert.deepEqual(
+    options.map((item) => item.label),
+    [
+      "Yes",
+      "Yes, and don't ask again for: node -e ' *",
+      "Yes, and switch to auto mode · auto mode handles these prompts for you",
+      "No",
+    ],
+  );
+  assert.deepEqual(
+    options.map((item) => item.send),
+    ["1", "2", "3", "4"],
+  );
+
+  const body = blockedSnippet(screen);
+  assert.match(body, /^⏺ Bash command/m);
+  assert.match(body, /cd \/Users\/me\/Git-Repo\/trizen-doctor/);
+  assert.match(body, /This command requires approval/);
+  assert.match(body, /4\. No/);
+  assert.doesNotMatch(body, /毫秒时间戳/);
+  assert.doesNotMatch(body, /Esc to cancel/);
+});
+
 test("blockedSnippet keeps the tail of the screen", () => {
   const screen = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n");
   const text = blockedSnippet(screen, 5);

@@ -14,16 +14,28 @@ export function paneIdFrom(event, context) {
 
 export function blockedSnippet(screen, limit = 24) {
   const lines = screenLines(screen);
-  const header = dialogHeaderIndex(lines);
-  let start;
-  let end = lines.length;
-  if (header < 0) {
-    start = Math.max(0, lines.length - limit);
-  } else {
-    start = dialogStartIndex(lines, header);
-    end = dialogEndIndex(lines, header);
+  const region = dialogRegion(lines);
+  if (!region) {
+    return capSnippet(lines.slice(Math.max(0, lines.length - limit)).join("\n").trim());
   }
-  return capSnippet(lines.slice(start, end).join("\n").trim());
+  return capSnippet(lines.slice(region.start, region.end).join("\n").trim());
+}
+
+// The dialog on screen: where the content that needs approving starts, where
+// the question is, and where the options end. Everything above `start` is
+// earlier conversation and must not be mistaken for part of the prompt.
+export function dialogRegion(lines) {
+  const header = dialogHeaderIndex(lines);
+  if (header < 0) {
+    return undefined;
+  }
+  const options = optionRange(lines, header);
+  return {
+    start: dialogStartIndex(lines, header, options),
+    header,
+    optionStart: options?.start,
+    end: options ? options.end : dialogEndIndex(lines, header),
+  };
 }
 
 // The line that asks the question. Prefer the last question-shaped line so
@@ -42,13 +54,43 @@ function dialogHeaderIndex(lines) {
   );
 }
 
-// Claude Code prints the tool call and its arguments above the question and
-// the options right under it; Codex prints the question first and the command
-// under it. When options follow the question immediately, the content that
-// needs approving is above: walk up to it, through the "⏺ Tool(...)" line.
-function dialogStartIndex(lines, header, maxAbove = 14) {
-  const next = lines[header + 1];
-  if (!next || !isOptionLine(next)) {
+// The numbered choices belonging to this question: the first numbered line at
+// or below it, then every line up to the chrome that follows. Non-numbered
+// lines in between are wrapped continuations, not new options.
+function optionRange(lines, header) {
+  let start = -1;
+  for (let i = header; i < lines.length; i++) {
+    const line = lines[i];
+    if (isOptionLine(line)) {
+      start = i;
+      break;
+    }
+    if (i > header && (isChromeLine(line) || isUserMarker(line))) {
+      break;
+    }
+  }
+  if (start < 0) {
+    return undefined;
+  }
+  let end = start + 1;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (isChromeLine(line) || isUserMarker(line)) {
+      break;
+    }
+    if (isOptionLine(line)) {
+      end = i + 1;
+    }
+  }
+  return { start, end };
+}
+
+// The content being approved sits above the question whenever the options come
+// right after it (Claude Code, Codex "requires approval" prompts). Walk up
+// through the command block to its header line; Codex's older shape puts the
+// command below the question instead, and then the question is the start.
+function dialogStartIndex(lines, header, options, maxAbove = 40) {
+  if (!options || options.start > header + 2) {
     return header;
   }
   let start = header;
@@ -60,25 +102,32 @@ function dialogStartIndex(lines, header, maxAbove = 14) {
     }
     start--;
     taken++;
-    if (/^\s*[⏺●]\s+\S/.test(prev)) {
+    if (isToolHeaderLine(prev)) {
       break;
     }
   }
   return start;
 }
 
+function isToolHeaderLine(line) {
+  const text = stripAnsi(line).trim();
+  return (
+    /^[⏺●]\s+\S/.test(text) ||
+    /^(bash|shell|read|write|edit|update|multiedit|web ?fetch|web ?search|task|glob|grep)\s+(command|file|tool)?\b/i.test(
+      text,
+    )
+  );
+}
+
 function isOptionLine(line) {
   return /^\s*[❯›▸>]?\s*\d{1,2}[.)、]\s+\S/.test(cleanOptionLine(line));
 }
 
-// Stop after the options, before the spinner, prompt box, or status line that
-// the visible screen carries below the dialog.
+// Stop before the spinner, prompt box, or status line that the visible screen
+// carries below a dialog with no numbered options.
 function dialogEndIndex(lines, header) {
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i];
-    if (isOptionLine(line)) {
-      continue;
-    }
     if (isChromeLine(line) || isUserMarker(line)) {
       return i;
     }
@@ -170,9 +219,15 @@ function cleanOptionLine(raw) {
 }
 
 export function parseBlockedOptions(screen) {
+  const lines = screenLines(screen);
+  const region = dialogRegion(lines);
+  // Only the choices under this question. Numbered lines elsewhere on screen
+  // are earlier chat messages, not options.
+  const candidates =
+    region?.optionStart === undefined ? [] : lines.slice(region.optionStart, region.end);
   const options = [];
   const seen = new Set();
-  for (const raw of String(screen || "").split("\n")) {
+  for (const raw of candidates) {
     const line = cleanOptionLine(raw);
     const numbered = line.match(/^(\d{1,2})[.)、]\s+(.+)$/);
     if (!numbered) {
@@ -192,10 +247,10 @@ export function parseBlockedOptions(screen) {
     }
     seen.add(send);
     seen.add(`i:${index}`);
-    options.push({ key: index, send, label: rest.slice(0, 56) });
+    options.push({ key: index, send, label: rest.slice(0, 72) });
   }
   if (options.length) {
-    return options.slice(0, 8);
+    return options.slice(0, 9);
   }
   if (/\b\[?y\/n\]?\b/i.test(screen) || /\(y\/n\)/i.test(screen)) {
     return [

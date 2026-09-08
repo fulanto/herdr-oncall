@@ -50,11 +50,11 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let handler = Handler()
 
-let width: CGFloat = 440
+let width: CGFloat = 540
 let pad: CGFloat = 12
 let rowH: CGFloat = 28
 let rowGap: CGFloat = 4
-let bodyLines = max(3, min(18, body.split(separator: "\n", omittingEmptySubsequences: false).count))
+let bodyLines = max(3, min(22, body.split(separator: "\n", omittingEmptySubsequences: false).count))
 let bodyH = CGFloat(bodyLines) * 15 + 8
 let optionsH = CGFloat(options.count) * (rowH + rowGap)
 let height = pad + 20 + 2 + 16 + 8 + bodyH + 8 + optionsH + 4 + 26 + pad
