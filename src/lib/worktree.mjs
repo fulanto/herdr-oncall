@@ -91,14 +91,22 @@ export function resolveWorktree(context = {}, event = {}, paneId = "", run = run
   return merged;
 }
 
+// Just the worktree's own name. The word "worktree" adds nothing, and the
+// branch is usually the same name with different separators — show it only
+// when it genuinely says something else.
 export function worktreeLabel(worktree) {
   const name = worktreeName(worktree);
   if (!name) {
     return undefined;
   }
   const branch = firstString(worktree.branch);
-  if (branch && branch.toLowerCase() !== name.toLowerCase()) {
-    return `worktree ${name} (${branch})`;
+  if (branch && !sameSlug(branch, name)) {
+    return `${name} (${branch})`;
   }
-  return `worktree ${name}`;
+  return name;
+}
+
+function sameSlug(a, b) {
+  const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return slug(a) === slug(b);
 }

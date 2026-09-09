@@ -15,6 +15,7 @@ import {
   notifyStatuses,
   optionKeyboard,
   parseBlockedOptions,
+  screenHasLiveDialog,
   seedConfigEnv,
   shouldNotify,
 } from "../src/lib/index.mjs";
@@ -195,6 +196,107 @@ Press enter to confirm or esc to cancel`;
   assert.deepEqual(
     yn.map((item) => item.send),
     ["y", "n"],
+  );
+});
+
+test("a live dialog survives the terminal footers drawn under it", () => {
+  // The labelled separator ("──── ↯ ─") and the status footers are chrome. An
+  // earlier version stopped scanning at the separator and reported no dialog,
+  // which would have swallowed a real notification.
+  const screen = [
+    "⏺ Bash(rm -rf -- /tmp/draft)",
+    "  ⎿  Contains brace with quote character",
+    "",
+    "  Do you want to proceed?",
+    "  ❯ 1. Yes",
+    "    2. No",
+    "",
+    "  Esc to cancel · Tab to amend",
+    "────────────────────────────────────────────────────── ↯ ─",
+    "  ➜ herdr-oncall git:(main) ✗ ctx:33% Opus 5 (1M context)",
+    "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(screen), true);
+  assert.deepEqual(
+    parseBlockedOptions(screen).map((item) => item.label),
+    ["Yes", "No"],
+  );
+  assert.doesNotMatch(blockedSnippet(screen), /ctx:33%/);
+});
+
+test("an idle screen with a labelled separator has no live dialog", () => {
+  const screen = [
+    "⏺ 说明文字。",
+    "✻ Baked for 5m · done 3:23 PM",
+    "─────────────────────────────── ↯  change-default-asr-provider ─",
+    "❯ 把注释补上",
+    "─────────────────────────────────────────────────────────────────",
+    "  ➜ asr-service git:(feature) ✗ ctx:20% Opus 5",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(screen), false);
+});
+
+test("a live dialog is the last thing on screen", () => {
+  // Shape captured from a real blocked Claude Code pane.
+  const live = [
+    "⏺ Bash(rm -rf -- /tmp/draft)",
+    "  ⎿  Contains brace with quote character (expansion obfuscation)",
+    "",
+    "  Do you want to proceed?",
+    "  ❯ 1. Yes",
+    "    2. Yes, and switch to auto mode · auto mode handles these prompts for you",
+    "    3. No",
+    "",
+    "  Esc to cancel · Tab to amend",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(live), true);
+});
+
+test("a dialog quoted in the transcript is not live", () => {
+  // Shape captured from this repo's own pane: the agent printed a permission
+  // prompt while discussing it, which is what pins Herdr's detector at blocked.
+  const quoted = [
+    "⏺ 这条规则匹配屏幕上的字面文本：",
+    "",
+    "  Do you want to proceed?",
+    "  ❯ 1. Yes",
+    "    2. No",
+    "",
+    "  所以这个 pane 会被误判成 blocked。文本滚出缓冲区后会自愈。",
+    "",
+    "✻ Baked for 5m 7s · done 3:23 PM",
+    "─────────────────────────────────────────────────── ↯ ─",
+    "❯",
+    "─────────────────────────────────────────────────────────",
+    "  ➜ herdr-oncall git:(main) ✗ ctx:33% Opus 5 (1M context)",
+    "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(quoted), false);
+});
+
+test("a working screen with no dialog at all is not live", () => {
+  const working = [
+    "⏺ 编译通过。现在看检测器看到了什么。",
+    "",
+    "✽ Determining… (52s · ↓ 3.0k tokens)",
+    "─────────────────────────────────────────────────── ↯ ─",
+    "❯",
+    "─────────────────────────────────────────────────────────",
+    "  ➜ herdr-oncall git:(main) ✗ ctx:33% Opus 5",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(working), false);
+  assert.equal(screenHasLiveDialog(""), false);
+  assert.equal(screenHasLiveDialog("   \n\n"), false);
+});
+
+test("the dynamic workflow prompt is live when it is the bottom of the screen", () => {
+  assert.equal(
+    screenHasLiveDialog(
+      ["Run a dynamic workflow?", "", "  › 1. Yes, run it", "    2. No", "", "  Esc to cancel · Tab to amend"].join(
+        "\n",
+      ),
+    ),
+    true,
   );
 });
 

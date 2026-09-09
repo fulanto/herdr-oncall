@@ -45,10 +45,15 @@ test("worktreeName only names linked worktrees", () => {
   assert.equal(worktreeName(undefined), undefined);
 });
 
-test("worktreeLabel shows the branch when it differs from the name", () => {
-  assert.equal(worktreeLabel({ ...linked, branch: "build_deploy_plan" }), "worktree build-deploy-plan (build_deploy_plan)");
-  assert.equal(worktreeLabel({ ...linked, branch: "build-deploy-plan" }), "worktree build-deploy-plan");
-  assert.equal(worktreeLabel(linked), "worktree build-deploy-plan");
+test("worktreeLabel names the worktree, and the branch only when it differs", () => {
+  assert.equal(worktreeLabel({ ...linked, branch: "build_deploy_plan" }), "build-deploy-plan");
+  assert.equal(worktreeLabel({ ...linked, branch: "build-deploy-plan" }), "build-deploy-plan");
+  assert.equal(worktreeLabel({ ...linked, branch: "Build/Deploy/Plan" }), "build-deploy-plan");
+  assert.equal(worktreeLabel(linked), "build-deploy-plan");
+  assert.equal(
+    worktreeLabel({ ...linked, branch: "feature/TRZN-7298" }),
+    "build-deploy-plan (feature/TRZN-7298)",
+  );
 });
 
 test("workspaceIdFrom falls back to the pane id prefix", () => {
@@ -79,7 +84,7 @@ test("formatWhere names the worktree and does not repeat it as the space", () =>
     { workspace_id: "wJ", workspace_label: "build-deploy-plan", worktree: { ...linked, branch: "build_deploy_plan" } },
     { data: { pane_id: "wJ:p1" } },
   );
-  assert.equal(where, "trizen-doctor · worktree build-deploy-plan (build_deploy_plan) · pane 1");
+  assert.equal(where, "trizen-doctor · build-deploy-plan · pane 1");
   const main = formatWhere(
     { workspace_id: "w8", workspace_label: "trizen-doctor", worktree: { ...linked, is_linked_worktree: false } },
     { data: { pane_id: "w8:p1" } },

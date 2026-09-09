@@ -17,6 +17,7 @@ import {
   readPaneScreen,
   resolveStatus,
   resolveWorktree,
+  screenHasLiveDialog,
   sendTelegram,
   shouldDebounce,
   shouldNotify,
@@ -72,6 +73,19 @@ function readScreen() {
   return "";
 }
 
+// The screen is the source of truth for `blocked`. Herdr reports the status
+// from its own text matching, which fires on dialog wording anywhere in the
+// recent buffer — an agent that merely printed a permission prompt pins the
+// pane at blocked — and the value it hands back can also be a stale one from
+// the previous detection pass. Only fall back to it when the pane cannot be
+// read at all.
+function blockedIsReal(screen) {
+  if (!String(screen).trim()) {
+    return stillBlocked(paneId);
+  }
+  return screenHasLiveDialog(screen);
+}
+
 function deliverFromPanel(text) {
   const result = deliverReply(paneId, text, status);
   if (herdrFailed(result)) {
@@ -81,15 +95,15 @@ function deliverFromPanel(text) {
   console.log(`panel sent · ${where}`);
 }
 
-// The pane moved on without us: the user answered in the Herdr UI
-// (blocked → anything else) or gave the agent new work (done → busy).
+// The pane moved on without us: the dialog is gone from the screen (answered
+// in Herdr) or, for done, the agent was given new work.
 function paneMovedOn() {
+  if (status === "blocked") {
+    return !blockedIsReal(readScreen());
+  }
   const live = currentPaneStatus(paneId);
   if (!live) {
     return false;
-  }
-  if (status === "blocked") {
-    return live !== "blocked";
   }
   return live === "working" || live === "blocked";
 }
@@ -145,6 +159,12 @@ async function pingTelegram(screen) {
 }
 
 if (status === "blocked") {
+  const screen = readScreen();
+  if (!blockedIsReal(screen)) {
+    console.log(`skipped · ${where} · blocked but no dialog on screen`);
+    process.exit(0);
+  }
+
   const delayMs = blockedDelayMs();
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
@@ -154,7 +174,6 @@ if (status === "blocked") {
       process.exit(0);
     }
     const started = markBlockedDelay(paneId);
-    const screen = readScreen();
     const outcome = await runPanel({
       options: parseBlockedOptions(screen),
       body: blockedSnippet(screen),
@@ -169,21 +188,25 @@ if (status === "blocked") {
         await sleep(remaining);
       }
     }
-    if (!blockedDelayStillMine(paneId, started) || !stillBlocked(paneId)) {
+    const later = readScreen();
+    if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
       process.exit(0);
     }
-    await pingTelegram(readScreen());
+    await pingTelegram(later);
     process.exit(0);
   }
+
   if (delayMs > 0) {
     const started = markBlockedDelay(paneId);
     await sleep(delayMs);
-    if (!blockedDelayStillMine(paneId, started) || !stillBlocked(paneId)) {
+    const later = readScreen();
+    if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
       process.exit(0);
     }
+    await pingTelegram(later);
+  } else {
+    await pingTelegram(screen);
   }
-  const screen = readScreen();
-  await pingTelegram(screen);
   if (usePanel && !shouldDebounce(paneId, "panel:blocked")) {
     await runPanel({ options: parseBlockedOptions(screen), body: blockedSnippet(screen) });
   }

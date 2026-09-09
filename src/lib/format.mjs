@@ -21,6 +21,35 @@ export function blockedSnippet(screen, limit = 24) {
   return capSnippet(renderBlock(slice));
 }
 
+// Is a dialog actually waiting on this screen, as opposed to one an agent
+// merely printed earlier in the transcript?
+//
+// A live dialog is the last thing the terminal drew: only key hints, the
+// prompt box and status lines come after it. Quoted text always has real
+// content below it. Herdr's own detector matches dialog wording anywhere in
+// the recent buffer, so a pane can be reported `blocked` purely because the
+// agent discussed a permission prompt — this is the check that tells the two
+// apart, and it reads the pane over Herdr's socket, so it works no matter what
+// is on the physical display.
+export function screenHasLiveDialog(screen) {
+  const lines = screenLines(screen);
+  if (!lines.some((line) => !isBlank(line))) {
+    return false;
+  }
+  const region = dialogRegion(lines);
+  if (!region) {
+    return false;
+  }
+  for (let i = region.end; i < lines.length; i++) {
+    const line = lines[i];
+    if (isBlank(line) || isRuleLine(line) || isChromeLine(line)) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 // The dialog as the terminal drew it: where the content being approved starts,
 // where the question is, and where the options end. Boundaries come from the
 // UI's own structure (turn markers, rules, paragraph breaks), never from a
@@ -265,10 +294,19 @@ function isBlank(line) {
   return !String(line).trim();
 }
 
-// A drawn border or separator: "\u2500\u2500\u2500\u2500", "\u256D\u2500\u2500\u256E", "\u2550\u2550\u2550".
+// A drawn border or separator: "\u2500\u2500\u2500\u2500", "\u256D\u2500\u2500\u256E", and the labelled kind the
+// agents draw across the width of the pane \u2014 "\u2500\u2500\u2500\u2500 ultracode \u21AF \u2500" \u2014 where a
+// short caption sits inside a long run of box-drawing characters.
 function isRuleLine(line) {
   const text = String(line).trim();
-  return text.length >= 3 && /^[\u2500-\u257F\u2580-\u259F\s]+$/.test(text);
+  if (text.length < 3) {
+    return false;
+  }
+  if (/^[\u2500-\u257F\u2580-\u259F\s]+$/.test(text)) {
+    return true;
+  }
+  const box = (text.match(/[\u2500-\u257F\u2580-\u259F]/g) || []).length;
+  return box >= 8 && box / text.length >= 0.5;
 }
 
 function isChromeLine(line) {
@@ -286,6 +324,11 @@ function isChromeLine(line) {
     /\b(tokens?|context window|esc to |press (enter|esc)|ctrl\+|interrupt|shift\+tab)\b/i.test(text) &&
     text.length < 96
   ) {
+    return true;
+  }
+  // Status footers the agents draw under everything else: Claude Code's
+  // "➜ repo git:(main) ctx:33% Opus 5", Codex's "» Ask Codex to do anything".
+  if (/\bctx:\d+%/.test(text) || /^»\s/.test(text)) {
     return true;
   }
   if (/^[❯›▸$]\s*$/.test(text) || /^codex>\s*$/i.test(text)) {

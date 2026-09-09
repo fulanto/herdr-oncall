@@ -230,6 +230,10 @@ export function showPanel({
     });
     child.on("close", (code, signal) => {
       cleanup();
+      const noise = stderr.trim();
+      if (noise) {
+        console.error(noise);
+      }
       if (resolvedByWatch) {
         resolve({ kind: "resolved", reason: resolvedByWatch });
         return;
@@ -239,7 +243,7 @@ export function showPanel({
         return;
       }
       if (code !== 0) {
-        console.error(`panel exited: ${stderr.trim() || `exit ${code}`}`);
+        console.error(`panel exited ${code}`);
         resolve({ kind: "unavailable" });
         return;
       }

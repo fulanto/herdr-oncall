@@ -30,6 +30,42 @@ func finish(_ result: String) -> Never {
 final class PanelWindow: NSPanel {
   override func cancelOperation(_ sender: Any?) { finish("dismiss") }
   override var canBecomeKey: Bool { true }
+
+  // AppKit otherwise pulls the window onto whichever screen it thinks it
+  // belongs to and clamps the frame there. With a display arranged left of the
+  // primary the target x is negative, gets clamped to the primary's minX, and
+  // the panel lands in the top-left corner. We place it ourselves.
+  override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+    frameRect
+  }
+}
+
+func debugLog(_ text: String) {
+  guard ProcessInfo.processInfo.environment["DESKTOP_PANEL_DEBUG"] == "1" else { return }
+  FileHandle.standardError.write("panel: \(text)\n".data(using: .utf8)!)
+}
+
+// The screen under the pointer, so the panel shows up where the user is
+// looking. Falls back to the active screen, then the primary one.
+func targetScreen() -> NSScreen {
+  let mouse = NSEvent.mouseLocation
+  if let hit = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) {
+    return hit
+  }
+  return NSScreen.main ?? NSScreen.screens[0]
+}
+
+// Top-right of that screen's usable area, measured on the real window frame so
+// the title bar is accounted for, and clamped so it can never leave the screen.
+func placeTopRight(_ window: NSWindow, on screen: NSScreen, margin: CGFloat = 16) {
+  let visible = screen.visibleFrame
+  var frame = window.frame
+  frame.size.width = min(frame.width, visible.width - 2 * margin)
+  frame.size.height = min(frame.height, visible.height - 2 * margin)
+  frame.origin.x = min(max(visible.maxX - frame.width - margin, visible.minX), visible.maxX - frame.width)
+  frame.origin.y = min(max(visible.maxY - frame.height - margin, visible.minY), visible.maxY - frame.height)
+  window.setFrame(frame, display: false)
+  debugLog("screen=\(NSStringFromRect(visible)) frame=\(NSStringFromRect(frame))")
 }
 
 final class Handler: NSObject, NSWindowDelegate {
@@ -50,51 +86,82 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let handler = Handler()
 
+let screen = targetScreen()
+
 let width: CGFloat = 540
 let pad: CGFloat = 12
 let rowH: CGFloat = 28
 let rowGap: CGFloat = 4
-let bodyLines = max(3, min(22, body.split(separator: "\n", omittingEmptySubsequences: false).count))
-let bodyH = CGFloat(bodyLines) * 15 + 8
+let margin: CGFloat = 16
+let labelWidth = width - 2 * pad
 let optionsH = CGFloat(options.count) * (rowH + rowGap)
-let height = pad + 20 + 2 + 16 + 8 + bodyH + 8 + optionsH + 4 + 26 + pad
 
-let mouse = NSEvent.mouseLocation
-let screen =
-  NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main ?? NSScreen.screens[0]
-let visible = screen.visibleFrame
-let origin = NSPoint(x: visible.maxX - width - 16, y: visible.maxY - height - 16)
+// The location leads: with several panes in flight, which task this is matters
+// more than what state it is in. It can be long ("repo · worktree name
+// (branch) · pane 2"), so let it wrap to a second line rather than truncate
+// the middle and hide the worktree.
+let locationFont = NSFont.boldSystemFont(ofSize: 15)
+let statusFont = NSFont.systemFont(ofSize: 11)
+
+func lineHeight(_ font: NSFont) -> CGFloat {
+  ceil(font.ascender - font.descender + font.leading)
+}
+
+func textHeight(_ text: String, font: NSFont, width: CGFloat, maxLines: Int) -> CGFloat {
+  let measured = (text as NSString).boundingRect(
+    with: NSSize(width: width, height: .greatestFiniteMagnitude),
+    options: [.usesLineFragmentOrigin, .usesFontLeading],
+    attributes: [.font: font])
+  let line = lineHeight(font)
+  return min(max(ceil(measured.height), line), line * CGFloat(maxLines))
+}
+
+let locationH = textHeight(location, font: locationFont, width: labelWidth, maxLines: 2)
+let statusH = lineHeight(statusFont)
+
+// Everything except the scrolling body.
+let chromeH = pad + locationH + 2 + statusH + 8 + 8 + optionsH + 4 + 26 + pad
+// Size the body to what this screen can actually show — a taller panel would
+// be clipped, and the body scrolls anyway.
+let roomForBody = screen.visibleFrame.height - 2 * margin - 28 - chromeH
+let wantedLines = min(22, max(3, body.split(separator: "\n", omittingEmptySubsequences: false).count))
+let bodyH = max(48, min(CGFloat(wantedLines) * 15 + 8, roomForBody))
+let height = chromeH + bodyH
 
 let panel = PanelWindow(
-  contentRect: NSRect(origin: origin, size: NSSize(width: width, height: height)),
+  contentRect: NSRect(x: 0, y: 0, width: width, height: height),
   styleMask: [.titled, .closable, .nonactivatingPanel, .utilityWindow, .hudWindow],
   backing: .buffered,
   defer: false)
 panel.title = "oncall"
 panel.level = .floating
-panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 panel.isFloatingPanel = true
 panel.hidesOnDeactivate = false
 panel.isReleasedWhenClosed = false
 panel.delegate = handler
+placeTopRight(panel, on: screen)
 
 let content = panel.contentView!
 var y = height - pad
 
-y -= 20
-let titleLabel = NSTextField(labelWithString: title)
-titleLabel.font = NSFont.boldSystemFont(ofSize: 14)
-titleLabel.textColor = .labelColor
-titleLabel.frame = NSRect(x: pad, y: y, width: width - 2 * pad, height: 20)
-content.addSubview(titleLabel)
+y -= locationH
+let locationLabel = NSTextField(labelWithString: location)
+locationLabel.font = locationFont
+locationLabel.textColor = .labelColor
+locationLabel.maximumNumberOfLines = 2
+locationLabel.lineBreakMode = .byTruncatingTail
+locationLabel.preferredMaxLayoutWidth = labelWidth
+locationLabel.frame = NSRect(x: pad, y: y, width: labelWidth, height: locationH)
+content.addSubview(locationLabel)
 
-y -= (2 + 16)
-let whereLabel = NSTextField(labelWithString: location)
-whereLabel.font = NSFont.systemFont(ofSize: 11)
-whereLabel.textColor = .secondaryLabelColor
-whereLabel.lineBreakMode = .byTruncatingMiddle
-whereLabel.frame = NSRect(x: pad, y: y, width: width - 2 * pad, height: 16)
-content.addSubview(whereLabel)
+y -= (2 + statusH)
+let statusLabel = NSTextField(labelWithString: title)
+statusLabel.font = statusFont
+statusLabel.textColor = .secondaryLabelColor
+statusLabel.lineBreakMode = .byTruncatingTail
+statusLabel.frame = NSRect(x: pad, y: y, width: labelWidth, height: statusH)
+content.addSubview(statusLabel)
 
 y -= (8 + bodyH)
 let scroll = NSScrollView(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: bodyH))
@@ -141,6 +208,8 @@ field.action = #selector(Handler.submitted(_:))
 content.addSubview(field)
 
 panel.makeKeyAndOrderFront(nil)
+// Ordering front can still move a window on some macOS versions; re-assert.
+placeTopRight(panel, on: screen, margin: margin)
 panel.makeFirstResponder(field)
 DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish("timeout") }
 app.run()
