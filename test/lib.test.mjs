@@ -198,6 +198,51 @@ Press enter to confirm or esc to cancel`;
   );
 });
 
+test("the block above the question is bounded by structure, not a line count", () => {
+  // 60 lines of command, far more than any fixed look-back would have kept.
+  const command = Array.from({ length: 60 }, (_, i) => `    line ${i + 1} of the script`);
+  const screen = [
+    "⏺ An earlier assistant turn that must stay out of this.",
+    "",
+    "❯ run the long script",
+    "",
+    "⏺ Bash command · from the general-purpose agent",
+    ...command,
+    "",
+    "  This command requires approval",
+    "",
+    "  Do you want to proceed?",
+    "  › 1. Yes",
+    "    2. No",
+    "",
+    "  Esc to cancel · Tab to amend",
+  ].join("\n");
+
+  const body = blockedSnippet(screen);
+  assert.match(body, /^⏺ Bash command/m);
+  assert.match(body, /line 1 of the script/);
+  assert.match(body, /line 60 of the script/);
+  assert.match(body, /2\. No/);
+  assert.doesNotMatch(body, /earlier assistant turn/);
+  assert.doesNotMatch(body, /run the long script/);
+  assert.doesNotMatch(body, /Esc to cancel/);
+});
+
+test("a paragraph break stops the walk when no turn marker is drawn", () => {
+  const screen = [
+    "unrelated output from before",
+    "",
+    "",
+    "  About to write to /etc/hosts",
+    "  Do you want to proceed?",
+    "  1. Yes",
+    "  2. No",
+  ].join("\n");
+  const body = blockedSnippet(screen);
+  assert.match(body, /About to write/);
+  assert.doesNotMatch(body, /unrelated output/);
+});
+
 test("options come only from the dialog, not from earlier numbered chat lines", () => {
   const screen = `❯ 1. 毫秒时间戳存时不要上。懒得去跑数据库迁移了
   2. 用子 agent 使用 opus 5 去跑翻译回填脚本

@@ -55,7 +55,18 @@ Tests isolate themselves by pointing these two env vars at `mkdtempSync` dirs; f
 - Telegram send: `shouldDebounce` → `readPaneScreen` (`herdr pane read`; `recent-unwrapped` source for done, `visible` for blocked) → `blockedSnippet`/`doneSnippet` + `parseBlockedOptions` (`src/lib/format.mjs`) → `sendTelegram` (inline keyboard for blocked options, else force-reply) → `rememberOutbound(messageId → paneId)`.
 - **done**: Telegram is pinged first, then the panel opens with the last turn and a text field; typed text becomes a new prompt.
 
-The panel binary speaks a one-line stdout protocol (`button:<i>` / `text:<t>` / `timeout` / `dismiss`), parsed by `parsePanelResult` in `src/lib/desktop.mjs`. Panel debounce uses the keys `panel:blocked` / `panel:done` so it does not interfere with the Telegram debounce. `blockedSnippet` handles two dialog shapes: Claude Code puts the `⏺ Tool(...)` line and arguments **above** "Do you want to proceed?" with options right under it, Codex puts the question first and the command under it; it walks up to the tool line in the first case and cuts the tail at the first chrome/prompt line after the options in both.
+The panel binary speaks a one-line stdout protocol (`button:<i>` / `text:<t>` / `timeout` / `dismiss`), parsed by `parsePanelResult` in `src/lib/desktop.mjs`. Panel debounce uses the keys `panel:blocked` / `panel:done` so it does not interfere with the Telegram debounce.
+
+### Reading a permission dialog off the screen (`src/lib/format.mjs`)
+
+`screenLines` keeps blank lines and drawn rules — they are the block boundaries, and the old version that filtered them out is what forced guesswork like "take the last N lines". `dialogRegion` then locates the dialog structurally, and both `blockedSnippet` and `parseBlockedOptions` work from that one region:
+
+- **question**: the last question-shaped line (`would you like` / `do you want` / `allow` / `permission` + `?`), so earlier prose that merely mentions permissions cannot win.
+- **options**: the first numbered line at or below the question, then every numbered line until chrome, a new turn marker, or a two-blank paragraph break. Numbered lines elsewhere on screen are earlier chat messages and must never be treated as choices — that bug shipped once and put three of the user's own sentences on the buttons.
+- **start**: if non-blank content sits between the question and the first option, the command is *below* the question (one Codex shape) and the question is the start. Otherwise the content is *above* (Claude Code, Codex "requires approval") and the walk goes up to the first structural boundary: a turn marker (`⏺`/`●`, included — it names the tool), a Codex tool header line, the previous user turn, a drawn rule, or two consecutive blanks. There is deliberately **no line cap**: the input is a single viewport, so the walk is already bounded, and a cap only truncates long commands.
+- **render**: `renderBlock` drops rules, trims the edges, and collapses blank runs.
+
+When a dialog shape does not extract cleanly, capture the real screen (`herdr pane read <pane> --source visible --format text`) and add it as a test case rather than tuning a threshold.
 
 ### Inbound flow (reply.mjs)
 

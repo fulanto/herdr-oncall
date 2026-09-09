@@ -15,15 +15,16 @@ export function paneIdFrom(event, context) {
 export function blockedSnippet(screen, limit = 24) {
   const lines = screenLines(screen);
   const region = dialogRegion(lines);
-  if (!region) {
-    return capSnippet(lines.slice(Math.max(0, lines.length - limit)).join("\n").trim());
-  }
-  return capSnippet(lines.slice(region.start, region.end).join("\n").trim());
+  const slice = region
+    ? lines.slice(region.start, region.end)
+    : lines.filter((line) => !isBlank(line)).slice(-limit);
+  return capSnippet(renderBlock(slice));
 }
 
-// The dialog on screen: where the content that needs approving starts, where
-// the question is, and where the options end. Everything above `start` is
-// earlier conversation and must not be mistaken for part of the prompt.
+// The dialog as the terminal drew it: where the content being approved starts,
+// where the question is, and where the options end. Boundaries come from the
+// UI's own structure (turn markers, rules, paragraph breaks), never from a
+// line count — the input is one viewport, so there is nothing to guard against.
 export function dialogRegion(lines) {
   const header = dialogHeaderIndex(lines);
   if (header < 0) {
@@ -55,8 +56,8 @@ function dialogHeaderIndex(lines) {
 }
 
 // The numbered choices belonging to this question: the first numbered line at
-// or below it, then every line up to the chrome that follows. Non-numbered
-// lines in between are wrapped continuations, not new options.
+// or below it, then every numbered line until the block ends. Blank lines and
+// wrapped continuations are passed over; chrome and a new turn end it.
 function optionRange(lines, header) {
   let start = -1;
   for (let i = header; i < lines.length; i++) {
@@ -65,7 +66,7 @@ function optionRange(lines, header) {
       start = i;
       break;
     }
-    if (i > header && (isChromeLine(line) || isUserMarker(line))) {
+    if (i > header && !isBlank(line) && (isChromeLine(line) || isUserMarker(line))) {
       break;
     }
   }
@@ -73,9 +74,17 @@ function optionRange(lines, header) {
     return undefined;
   }
   let end = start + 1;
+  let blanks = 0;
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i];
-    if (isChromeLine(line) || isUserMarker(line)) {
+    if (isBlank(line)) {
+      if (++blanks >= 2) {
+        break;
+      }
+      continue;
+    }
+    blanks = 0;
+    if (isChromeLine(line) || isUserMarker(line) || isTurnMarker(line)) {
       break;
     }
     if (isOptionLine(line)) {
@@ -85,37 +94,59 @@ function optionRange(lines, header) {
   return { start, end };
 }
 
-// The content being approved sits above the question whenever the options come
-// right after it (Claude Code, Codex "requires approval" prompts). Walk up
-// through the command block to its header line; Codex's older shape puts the
-// command below the question instead, and then the question is the start.
-function dialogStartIndex(lines, header, options, maxAbove = 40) {
-  if (!options || options.start > header + 2) {
+// The content being approved sits above the question only when the options
+// follow it with nothing in between. When lines separate the two — Codex
+// printing "Environment:" and the command under the question — the content is
+// below and the question is the start. Otherwise walk up to the first
+// structural boundary: the turn marker or tool header that owns this block,
+// the previous user turn, a drawn rule, or a paragraph break.
+function dialogStartIndex(lines, header, options) {
+  if (!options || hasContentBetween(lines, header, options.start)) {
     return header;
   }
   let start = header;
-  let taken = 0;
-  while (start > 0 && taken < maxAbove) {
+  let blanks = 0;
+  while (start > 0) {
     const prev = lines[start - 1];
-    if (isChromeLine(prev) || isUserMarker(prev)) {
+    if (isBlank(prev)) {
+      if (++blanks >= 2) {
+        break;
+      }
+      start--;
+      continue;
+    }
+    blanks = 0;
+    if (isUserMarker(prev) || isRuleLine(prev)) {
       break;
     }
     start--;
-    taken++;
-    if (isToolHeaderLine(prev)) {
+    if (isTurnMarker(prev) || isToolHeaderLine(prev)) {
       break;
     }
   }
   return start;
 }
 
+function hasContentBetween(lines, from, to) {
+  for (let i = from + 1; i < to; i++) {
+    if (!isBlank(lines[i]) && !isRuleLine(lines[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// "⏺ Bash(...)" in Claude Code, "● Edit" in others: the line that owns the
+// block below it.
+function isTurnMarker(line) {
+  return /^\s{0,4}[⏺●⚫]\s+\S/.test(line);
+}
+
+// Codex names the tool on its own header line instead of using a marker glyph.
 function isToolHeaderLine(line) {
-  const text = stripAnsi(line).trim();
-  return (
-    /^[⏺●]\s+\S/.test(text) ||
-    /^(bash|shell|read|write|edit|update|multiedit|web ?fetch|web ?search|task|glob|grep)\s+(command|file|tool)?\b/i.test(
-      text,
-    )
+  const text = line.trim();
+  return /^(bash|shell|local shell|read|write|edit|update|multi-?edit|apply.?patch|web.?fetch|web.?search|task|glob|grep)\b.{0,60}$/i.test(
+    text,
   );
 }
 
@@ -126,17 +157,45 @@ function isOptionLine(line) {
 // Stop before the spinner, prompt box, or status line that the visible screen
 // carries below a dialog with no numbered options.
 function dialogEndIndex(lines, header) {
+  let blanks = 0;
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i];
-    if (isChromeLine(line) || isUserMarker(line)) {
+    if (isBlank(line)) {
+      if (++blanks >= 2) {
+        return i;
+      }
+      continue;
+    }
+    blanks = 0;
+    if (isChromeLine(line) || isUserMarker(line) || isTurnMarker(line)) {
       return i;
     }
   }
   return lines.length;
 }
 
+// Drop the drawn borders, trim the edges, and collapse blank runs so the block
+// reads the same in Telegram and in the panel.
+function renderBlock(slice) {
+  const kept = slice.filter((line) => !isRuleLine(line));
+  const out = [];
+  for (const line of kept) {
+    if (isBlank(line)) {
+      if (out.length && !isBlank(out.at(-1))) {
+        out.push("");
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  while (out.length && isBlank(out.at(-1))) {
+    out.pop();
+  }
+  return out.join("\n").trim();
+}
+
 export function doneSnippet(screen, limit = 40) {
-  const lines = screenLines(screen).filter((line) => !isChromeLine(line));
+  const lines = screenLines(screen).filter((line) => !isChromeLine(line) && !isRuleLine(line));
   if (!lines.length) {
     return "";
   }
@@ -156,12 +215,24 @@ export function doneSnippet(screen, limit = 40) {
   return capSnippet(body.join("\n").trim());
 }
 
+// Lines as the terminal drew them. Blank lines and drawn rules are kept: they
+// are the boundaries between blocks, and dropping them is what forces guesswork
+// like "take the last N lines". Consumers filter what they do not want.
 function screenLines(screen) {
   return stripAnsi(screen)
     .replace(/\r/g, "")
     .split("\n")
-    .map((line) => line.replace(/\s+$/g, ""))
-    .filter((line) => line.trim() && !/^[\u2500-\u257F]+$/.test(line.trim()));
+    .map((line) => line.replace(/\s+$/g, ""));
+}
+
+function isBlank(line) {
+  return !String(line).trim();
+}
+
+// A drawn border or separator: "\u2500\u2500\u2500\u2500", "\u256D\u2500\u2500\u256E", "\u2550\u2550\u2550".
+function isRuleLine(line) {
+  const text = String(line).trim();
+  return text.length >= 3 && /^[\u2500-\u257F\u2580-\u259F\s]+$/.test(text);
 }
 
 function isChromeLine(line) {
