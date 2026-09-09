@@ -10,7 +10,7 @@ Telegram is only the first channel. If notify + reply work, a thin app talks to 
 - `done` → ping includes the last assistant turn (not the full transcript). Reply with a new instruction
 - only your `TELEGRAM_CHAT_ID` is accepted
 - a message that is not a reply goes to the last pinged pane
-- the location line names the repo, the worktree when the pane runs in a linked one, the tab, and the pane
+- the location line names the repo, the worktree or branch the pane is working in, the tab, and the pane
 
 **v0.4, macOS:** a desktop panel comes first. On `blocked` a floating window opens in the top-right corner of the screen you are on (it follows you across Spaces) with the tool call and dialog, one button per option, and a text field. Enter picks option 1, Cmd+N picks option N, typing sends that text. Answer there and no Telegram ping is sent. Let it time out (`BLOCKED_DELAY_SEC`) and Telegram takes over. On `done` the panel shows the last turn with a field for the next instruction; Telegram is pinged at the same time. The panel stays out of the way when you are already looking at the pane (Herdr's focused pane, terminal in front), and closes by itself once the pane is answered in Herdr or you switch to it.
 

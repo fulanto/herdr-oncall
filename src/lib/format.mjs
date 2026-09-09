@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { stripAnsi } from "./herdr.mjs";
-import { worktreeFrom, worktreeLabel, worktreeName } from "./worktree.mjs";
+import { worktreeFrom, worktreeLabel, worktreeShortName } from "./worktree.mjs";
 
 export function paneIdFrom(event, context) {
   const raw =
@@ -468,7 +468,7 @@ export function formatWhere(context = {}, event = {}) {
   const repo = repoName(context, event);
   const worktree = worktreeFrom(context, event);
   const worktreeText = worktreeLabel(worktree);
-  const worktreeShort = worktreeName(worktree);
+  const worktreeShort = worktreeShortName(worktree);
   const space = spaceName(context, event);
   const tab = namedTabLabel(context.tab_label ?? event?.data?.tab_label);
   const pane = paneOrdinal(paneIdFrom(event, context));
