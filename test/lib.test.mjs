@@ -198,6 +198,65 @@ Press enter to confirm or esc to cancel`;
   );
 });
 
+test("a numbered description list above the choices is not mistaken for them", () => {
+  const screen = [
+    "Run a dynamic workflow?",
+    "",
+    "  │ Adversarially review the tool/gateway/interactive payload slots",
+    "",
+    "  This dynamic workflow will spin up multiple subagents across the following phases:",
+    "    1. Review — three lenses over the uncommitted round-3 edits",
+    "       · \"${…}nn${…}nnReport only findings you verified by reading co…\"",
+    "",
+    "  Dynamic workflows can use a lot of tokens quickly by running many subagents in parallel — which counts against your usage limit. Stop a running workflow at any time with /workflows.",
+    "",
+    "  › 1. Yes, run it",
+    "    2. View raw script",
+    "    3. No",
+    "",
+    "  Esc to cancel · Tab to amend",
+    "  ctrl+g to edit script in $EDITOR",
+  ].join("\n");
+
+  const options = parseBlockedOptions(screen);
+  assert.deepEqual(
+    options.map((item) => item.label),
+    ["Yes, run it", "View raw script", "No"],
+  );
+  assert.deepEqual(
+    options.map((item) => item.send),
+    ["1", "2", "3"],
+  );
+
+  const body = blockedSnippet(screen);
+  assert.match(body, /^Run a dynamic workflow\?/m);
+  assert.match(body, /Adversarially review/);
+  assert.match(body, /1\. Review — three lenses/);
+  assert.match(body, /3\. No/);
+  assert.doesNotMatch(body, /Esc to cancel/);
+  assert.doesNotMatch(body, /ctrl\+g/);
+});
+
+test("a wrapped option keeps its continuation line out of the choice list", () => {
+  const screen = [
+    "⏺ Bash(cat /etc/hosts)",
+    "",
+    "  Do you want to proceed?",
+    "  › 1. Yes",
+    "    2. Yes, allow reading from /Users/me/.local/state/herdr/plugins",
+    "       from this project",
+    "    3. No",
+    "",
+    "  Esc to cancel",
+  ].join("\n");
+  const options = parseBlockedOptions(screen);
+  assert.deepEqual(
+    options.map((item) => item.key),
+    ["1", "2", "3"],
+  );
+  assert.match(blockedSnippet(screen), /from this project/);
+});
+
 test("the block above the question is bounded by structure, not a line count", () => {
   // 60 lines of command, far more than any fixed look-back would have kept.
   const command = Array.from({ length: 60 }, (_, i) => `    line ${i + 1} of the script`);

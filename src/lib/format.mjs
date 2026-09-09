@@ -26,22 +26,95 @@ export function blockedSnippet(screen, limit = 24) {
 // UI's own structure (turn markers, rules, paragraph breaks), never from a
 // line count — the input is one viewport, so there is nothing to guard against.
 export function dialogRegion(lines) {
-  const header = dialogHeaderIndex(lines);
-  if (header < 0) {
+  const options = trailingOptionRun(lines);
+  const header = questionIndex(lines, options);
+  if (header < 0 && !options) {
     return undefined;
   }
-  const options = optionRange(lines, header);
+  const anchor = header >= 0 ? header : options.start;
   return {
-    start: dialogStartIndex(lines, header, options),
-    header,
+    start: dialogStartIndex(lines, anchor, options),
+    header: anchor,
     optionStart: options?.start,
-    end: options ? options.end : dialogEndIndex(lines, header),
+    end: options ? options.end : dialogEndIndex(lines, anchor),
   };
 }
 
-// The line that asks the question. Prefer the last question-shaped line so
-// earlier prose that merely mentions "permission" does not win.
-function dialogHeaderIndex(lines) {
+// The choices are always the last thing a dialog draws: the run of numbered
+// lines at the bottom of the screen, below any prose and above the key hints.
+// Numbered lines higher up belong to the description or to earlier chat, and
+// taking the first run instead of this one is what once put a workflow's phase
+// list on the buttons.
+function trailingOptionRun(lines) {
+  let bottom = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (isBlank(line) || isRuleLine(line) || isChromeLine(line)) {
+      continue;
+    }
+    if (isOptionLine(line)) {
+      bottom = i;
+    }
+    break;
+  }
+  if (bottom < 0) {
+    return undefined;
+  }
+  // A wrapped option continues on a more indented line; anything at or left of
+  // the option column ends the run.
+  const column = indentOf(lines[bottom]);
+  let top = bottom;
+  for (let i = bottom - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (isOptionLine(line)) {
+      top = i;
+      continue;
+    }
+    if (isBlank(line) || isChromeLine(line) || isRuleLine(line) || isTurnMarker(line)) {
+      break;
+    }
+    if (indentOf(line) > column) {
+      top = i;
+      continue;
+    }
+    break;
+  }
+  return { start: top, end: bottom + 1 };
+}
+
+// The question owning those choices: the nearest line above them that ends in a
+// question mark. It stops at the same structural boundaries as the body walk,
+// so a question from an earlier turn cannot be picked up.
+function questionIndex(lines, options) {
+  if (options) {
+    let blanks = 0;
+    for (let i = options.start - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (isBlank(line)) {
+        if (++blanks >= 2) {
+          break;
+        }
+        continue;
+      }
+      blanks = 0;
+      if (isUserMarker(line) || isRuleLine(line)) {
+        break;
+      }
+      if (/\?\s*$/.test(line)) {
+        return i;
+      }
+      if (isTurnMarker(line)) {
+        break;
+      }
+    }
+  }
+  return keywordHeaderIndex(lines);
+}
+
+// No numbered choices on screen (a bare y/n prompt): name the question by its
+// wording instead. Prefer the last match so earlier prose that merely mentions
+// permissions does not win.
+function keywordHeaderIndex(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (/(would you like|do you want|allow|permission)[^?]*\?/i.test(lines[i])) {
       return i;
@@ -49,49 +122,12 @@ function dialogHeaderIndex(lines) {
   }
   return lines.findIndex(
     (line) =>
-      /would you like|do you want|allow |permission|environment:/i.test(line) ||
-      /^\s*\$ /.test(line) ||
-      /^\s*[^\w]*\d{1,2}[.)]/.test(line),
+      /would you like|do you want|allow |permission|environment:/i.test(line) || /^\s*\$ /.test(line),
   );
 }
 
-// The numbered choices belonging to this question: the first numbered line at
-// or below it, then every numbered line until the block ends. Blank lines and
-// wrapped continuations are passed over; chrome and a new turn end it.
-function optionRange(lines, header) {
-  let start = -1;
-  for (let i = header; i < lines.length; i++) {
-    const line = lines[i];
-    if (isOptionLine(line)) {
-      start = i;
-      break;
-    }
-    if (i > header && !isBlank(line) && (isChromeLine(line) || isUserMarker(line))) {
-      break;
-    }
-  }
-  if (start < 0) {
-    return undefined;
-  }
-  let end = start + 1;
-  let blanks = 0;
-  for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (isBlank(line)) {
-      if (++blanks >= 2) {
-        break;
-      }
-      continue;
-    }
-    blanks = 0;
-    if (isChromeLine(line) || isUserMarker(line) || isTurnMarker(line)) {
-      break;
-    }
-    if (isOptionLine(line)) {
-      end = i + 1;
-    }
-  }
-  return { start, end };
+function indentOf(line) {
+  return String(line).match(/^\s*/)[0].length;
 }
 
 // The content being approved sits above the question only when the options
