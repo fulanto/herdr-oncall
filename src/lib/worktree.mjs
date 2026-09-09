@@ -1,9 +1,6 @@
 import { basename } from "node:path";
 import { runHerdr } from "./paths.mjs";
 
-// Branches that name no particular task; showing them adds nothing.
-const DEFAULT_BRANCHES = new Set(["main", "master", "trunk"]);
-
 function firstString(...values) {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) {
@@ -111,7 +108,8 @@ function dropEmpty(source) {
 }
 
 // What identifies this pane's task: a linked worktree's own name, or the
-// branch of a plain checkout.
+// branch of a plain checkout. `main` counts — knowing a pane sits on the
+// default branch is as much a fact as any other branch.
 export function worktreeLabel(worktree) {
   if (!worktree) {
     return undefined;
@@ -120,9 +118,6 @@ export function worktreeLabel(worktree) {
   const name = worktreeName(worktree);
   if (name) {
     return branch && !sameSlug(branch, name) ? `${name} (${branch})` : name;
-  }
-  if (!branch || DEFAULT_BRANCHES.has(branch.toLowerCase())) {
-    return undefined;
   }
   return branch;
 }

@@ -72,9 +72,9 @@ test("worktreeLabel names the worktree, or the branch of a plain checkout", () =
   assert.equal(worktreeLabel({ ...linked, branch: "feature/TRZN-7298" }), "build-deploy-plan (feature/TRZN-7298)");
 
   assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "Copilot5" }), "Copilot5");
-  // Nothing to say on the default branch.
-  assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "main" }), undefined);
-  assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "Master" }), undefined);
+  // The default branch is a fact worth stating too.
+  assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "main" }), "main");
+  assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "master" }), "master");
   assert.equal(worktreeLabel({ is_linked_worktree: false }), undefined);
   assert.equal(worktreeLabel(undefined), undefined);
 });
@@ -144,5 +144,5 @@ test("formatWhere names the repo and the task, without repeating the workspace",
     },
     { data: { pane_id: "w8:p1" } },
   );
-  assert.equal(onMain, "trizen-doctor · pane 1");
+  assert.equal(onMain, "trizen-doctor · main · pane 1");
 });
