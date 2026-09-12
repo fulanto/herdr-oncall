@@ -1,12 +1,41 @@
 import { envFlag } from "./config.mjs";
 
-export async function telegramGetMe(token) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
-    signal: AbortSignal.timeout(15_000),
+const TELEGRAM_API = "https://api.telegram.org";
+
+// One door for every Telegram call, so the timeout and the tolerant body parse
+// are decided in a single place.
+export async function telegramApi(token, method, payload, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const url = `${TELEGRAM_API}/bot${token}/${method}`;
+  const hasPayload = payload !== undefined && payload !== null;
+  const httpMethod = hasPayload ? "POST" : "GET";
+  const headers = hasPayload ? { "content-type": "application/json" } : {};
+  const body = hasPayload ? JSON.stringify(payload) : undefined;
+
+  const response = await fetch(url, {
+    method: httpMethod,
+    headers,
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
   });
-  const json = await response.json();
-  if (!json.ok) {
-    throw new Error(json.description || "telegram getMe failed");
+  const text = await response.text().catch(() => "");
+  return { ok: response.ok, status: response.status, text, json: parseBody(text) };
+}
+
+// Telegram answers a rate limit or an outage with HTML, not JSON; the callers
+// below all branch on `ok`/`status`, so a bad body must never throw here.
+function parseBody(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function telegramGetMe(token) {
+  const { json } = await telegramApi(token, "getMe", undefined, { timeoutMs: 15_000 });
+  if (!json?.ok) {
+    throw new Error(json?.description || "telegram getMe failed");
   }
   return json.result;
 }
@@ -23,19 +52,37 @@ export async function sendTelegram(token, chatId, text, options = {}) {
   } else if (forceReply) {
     payload.reply_markup = { force_reply: true, selective: true };
   }
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const body = await response.text().catch(() => "");
-  if (!response.ok) {
-    throw new Error(`telegram sendMessage failed: ${response.status} ${body}`);
+  const { ok, status, text: body, json } = await telegramApi(token, "sendMessage", payload);
+  if (!ok) {
+    throw new Error(`telegram sendMessage failed: ${status} ${body}`);
   }
-  try {
-    const json = JSON.parse(body);
-    return json?.result?.message_id;
-  } catch {
-    return undefined;
+  return json?.result?.message_id;
+}
+
+export async function telegramGetUpdates(token, offset) {
+  const payload = {
+    timeout: 25,
+    allowed_updates: ["message", "callback_query"],
+  };
+  if (offset) {
+    payload.offset = Number(offset);
   }
+  // The server holds the request for `timeout` seconds; the client budget must outlast it.
+  const { json } = await telegramApi(token, "getUpdates", payload, { timeoutMs: 35_000 });
+  if (!json?.ok) {
+    throw new Error(json?.description || "telegram getUpdates failed");
+  }
+  return json.result || [];
+}
+
+export async function telegramAnswerCallback(token, callbackQueryId, text) {
+  if (!callbackQueryId) {
+    return;
+  }
+  // A missed ack only leaves the button spinner up; never fail a delivery over it.
+  await telegramApi(token, "answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: false,
+  }).catch(() => {});
 }

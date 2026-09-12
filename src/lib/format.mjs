@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { stripAnsi } from "./herdr.mjs";
 import { worktreeFrom, worktreeLabel, worktreeShortName } from "./worktree.mjs";
@@ -388,8 +389,13 @@ export function parseBlockedOptions(screen) {
     let shortcut;
     const trailing = rest.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
     if (trailing) {
-      rest = trailing[1].trim();
       shortcut = normalizeShortcut(trailing[2]);
+      // Only a real keystroke is stripped from the label. "(default)" and
+      // "(shift+tab)" are prose the user should still read, and typing them
+      // into the pane is what a stripped non-shortcut used to do.
+      if (shortcut) {
+        rest = trailing[1].trim();
+      }
     }
     const send = shortcut || index;
     if (seen.has(send) || seen.has(`i:${index}`)) {
@@ -411,6 +417,26 @@ export function parseBlockedOptions(screen) {
   return [];
 }
 
+// The one gate for every set of buttons we offer, Telegram and desktop panel
+// alike. A hook-authoritative block has no menu drawn at all, so the y/n
+// fallback above would happily put buttons on an agent that is waiting for free
+// text — and a tap would send a keystroke it never asked for.
+export function dialogChoices(screen, { hookAuthoritative = false } = {}) {
+  return hookAuthoritative ? [] : parseBlockedOptions(screen);
+}
+
+// A trailing parenthetical is a keystroke only when it names one. The old
+// "alphanumeric and short" rule turned "1. Yes (default)" into the key
+// sequence "default", which the reply path types into the pane as text.
+const NAMED_SHORTCUTS = {
+  esc: "esc",
+  escape: "esc",
+  enter: "enter",
+  return: "enter",
+  tab: "tab",
+  space: "space",
+};
+
 function normalizeShortcut(raw) {
   const text = String(raw || "")
     .trim()
@@ -418,19 +444,44 @@ function normalizeShortcut(raw) {
   if (!text) {
     return undefined;
   }
-  if (text === "escape") {
-    return "esc";
+  if (NAMED_SHORTCUTS[text]) {
+    return NAMED_SHORTCUTS[text];
   }
-  if (text === "return") {
-    return "enter";
-  }
-  if (/^[a-z0-9]+$/.test(text) && text.length <= 8) {
-    return text;
-  }
-  if (text === "esc" || text === "enter" || text === "tab") {
+  if (/^[a-z0-9]$/.test(text)) {
     return text;
   }
   return undefined;
+}
+
+// What this dialog is asking, condensed to a stable id: the question plus the
+// choices, nothing else. The inbound path compares it against the live screen
+// before pressing a key, so a button tapped minutes late cannot answer whatever
+// dialog happens to be up now. Spinners and footers sit outside the region, so
+// two reads of an unchanged dialog hash the same.
+export function dialogFingerprint(screen) {
+  const lines = screenLines(screen);
+  const region = dialogRegion(lines);
+  if (!region) {
+    return undefined;
+  }
+  const parts = [collapse(region.header >= 0 ? lines[region.header] : "")];
+  for (const option of parseBlockedOptions(screen)) {
+    parts.push(`${option.key}|${collapse(option.label)}`);
+  }
+  // The body too, but only down to the first option: two Bash approvals in a
+  // row ask the identical question with the identical choices, and only the
+  // command tells "delete the draft" from "force-push to main". The option
+  // lines themselves are already hashed as `key|label`, and re-hashing them raw
+  // would move the fingerprint every time the terminal's selection marker does.
+  parts.push(collapse(renderBlock(lines.slice(region.start, region.optionStart ?? region.end))));
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
+}
+
+function collapse(text) {
+  return String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 export function optionKeyboard(options) {

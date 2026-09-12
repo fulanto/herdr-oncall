@@ -1,8 +1,15 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
+  agentDetectionSkipped,
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
+  consecutiveGate,
   currentPaneStatus,
+  decideBlockedReal,
+  dialogChoices,
+  dialogFingerprint,
   doneSnippet,
   formatMessage,
   formatWhere,
@@ -12,9 +19,9 @@ import {
   optionKeyboard,
   paneIdFrom,
   panelAvailable,
-  parseBlockedOptions,
   readJsonEnv,
   readPaneScreen,
+  readScreenSettled,
   resolveStatus,
   resolveWorktree,
   screenHasLiveDialog,
@@ -23,6 +30,7 @@ import {
   shouldNotify,
   showPanel,
   sleep,
+  stateDir,
   statusTitle,
   stillBlocked,
   userAtPane,
@@ -77,17 +85,76 @@ function readScreen() {
 // from its own text matching, which fires on dialog wording anywhere in the
 // recent buffer — an agent that merely printed a permission prompt pins the
 // pane at blocked — and the value it hands back can also be a stale one from
-// the previous detection pass. Only fall back to it when the pane cannot be
-// read at all.
-function blockedIsReal(screen) {
-  if (!String(screen).trim()) {
-    return stillBlocked(paneId);
+// the previous detection pass. A pane that still reads blank after
+// `readScreenSettled` is a redraw that never finished or a pane that is gone;
+// it is skipped outright, and Herdr's status is never consulted for it.
+//
+// The exception is an agent whose lifecycle a hook owns (Herdr 0.9.0: Pi, OMP,
+// Kimi Code, OpenCode, Kilo, MastraCode): there is no menu to find, so the
+// integration's own `blocked` is the only witness there is.
+let hookAuthoritative = false;
+let detectionSkippedCache;
+
+// One `agent get` per hook process: the panel polls this every 2s.
+function detectionSkipped() {
+  if (detectionSkippedCache === undefined) {
+    detectionSkippedCache = { value: agentDetectionSkipped(paneId) };
   }
-  return screenHasLiveDialog(screen);
+  return detectionSkippedCache.value;
 }
 
-function deliverFromPanel(text) {
-  const result = deliverReply(paneId, text, status);
+function blockedIsReal(screen) {
+  if (!String(screen).trim()) {
+    // Nothing on the pane after several retries: a redraw that never finished,
+    // or a pane that is gone. Either way there is no question to relay, and an
+    // empty panel is exactly the bug this gate exists to prevent.
+    return Boolean(decideBlockedReal({ screenReadable: false }));
+  }
+  const screenLive = screenHasLiveDialog(screen);
+  const skipped = screenLive ? undefined : detectionSkipped();
+  const verdict = decideBlockedReal({
+    screenLive,
+    detectionSkipped: skipped,
+    stillBlocked: skipped === true ? stillBlocked(paneId) : false,
+  });
+  if (verdict === "hook-authoritative" && !hookAuthoritative) {
+    console.log(`hook-authoritative · ${where}`);
+  }
+  // Tracks the latest verdict: if a menu does appear later, the ping gets its
+  // buttons and its fingerprint back.
+  hookAuthoritative = verdict === "hook-authoritative";
+  return Boolean(verdict);
+}
+
+// A skip that explains itself: the log line carries the bottom of the screen,
+// and the full capture lands on disk so an unrecognised dialog shape can become
+// a test fixture instead of a silent drop.
+function skipTrace(screen) {
+  const lines = String(screen ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-8)
+    .map((line) => (line.length > 120 ? `${line.slice(0, 120)}…` : line));
+  try {
+    mkdirSync(stateDir(), { recursive: true });
+    writeFileSync(join(stateDir(), "last-skipped-screen.txt"), String(screen ?? ""), "utf8");
+  } catch {
+    // A missing state dir must not turn a skip into a crash.
+  }
+  return `tail: ${lines.join(" | ") || "(empty screen)"}`;
+}
+
+// A blank pane and a pane whose dialog the parser did not recognise are two
+// different failures, and only the second one is worth a fixture.
+function blockedSkipReason(screen) {
+  return String(screen ?? "").trim()
+    ? "blocked but no dialog on screen"
+    : "blocked but pane screen empty";
+}
+
+function deliverFromPanel(text, fingerprint) {
+  const result = deliverReply(paneId, text, status, { fingerprint });
   if (herdrFailed(result)) {
     console.error(`panel delivery failed · ${where}: ${herdrErrorText(result)}`);
     return;
@@ -96,10 +163,23 @@ function deliverFromPanel(text) {
 }
 
 // The pane moved on without us: the dialog is gone from the screen (answered
-// in Herdr) or, for done, the agent was given new work.
+// in Herdr) or, for done, the agent was given new work. A hook-authoritative
+// block has no dialog to watch, so its witness is the status instead.
+const dialogGone = consecutiveGate(2);
+
 function paneMovedOn() {
   if (status === "blocked") {
-    return !blockedIsReal(readScreen());
+    if (hookAuthoritative) {
+      const live = currentPaneStatus(paneId);
+      return Boolean(live) && live !== "blocked";
+    }
+    const screen = readScreen();
+    if (!String(screen).trim()) {
+      // A pane mid-redraw reads back blank. That is not the dialog going away,
+      // and closing the panel on it loses a question nobody answered.
+      return false;
+    }
+    return dialogGone.observe(!blockedIsReal(screen));
   }
   const live = currentPaneStatus(paneId);
   if (!live) {
@@ -121,7 +201,7 @@ function panelShouldClose() {
 
 // Returns "handled" | "resolved" | "at-pane" | "superseded" | "unavailable" |
 // "timeout" | "dismiss" | "skipped".
-async function runPanel({ options, body, timeoutMs }) {
+async function runPanel({ options, body, timeoutMs, fingerprint }) {
   if (userAtPane(paneId)) {
     console.log(`panel skipped · ${where} · pane is on screen`);
     return "skipped";
@@ -130,11 +210,11 @@ async function runPanel({ options, body, timeoutMs }) {
   const result = await showPanel({ paneId, title, where, body, options, timeoutMs, until: panelShouldClose });
   if (result.kind === "button") {
     const option = options[result.index];
-    deliverFromPanel(option?.send ?? String(result.index + 1));
+    deliverFromPanel(option?.send ?? String(result.index + 1), fingerprint);
     return "handled";
   }
   if (result.kind === "text") {
-    deliverFromPanel(result.text);
+    deliverFromPanel(result.text, fingerprint);
     return "handled";
   }
   if (result.kind === "resolved") {
@@ -149,23 +229,32 @@ async function pingTelegram(screen) {
     return;
   }
   const snippet = status === "blocked" ? blockedSnippet(screen) : isDone ? doneSnippet(screen) : "";
-  const options = status === "blocked" ? parseBlockedOptions(screen) : [];
+  // A hook-authoritative block has no menu on screen: nothing to put on buttons
+  // and nothing to fingerprint, so the reply comes back as free text.
+  const dialogBacked = status === "blocked" && !hookAuthoritative;
+  const options = dialogChoices(screen, { hookAuthoritative: !dialogBacked });
+  const fingerprint = dialogBacked ? dialogFingerprint(screen) : undefined;
   const text = formatMessage(context, event, status, snippet);
   const messageId = await sendTelegram(token, chatId, text, {
     forceReply: status !== "blocked" || options.length === 0,
     replyMarkup: optionKeyboard(options),
   });
-  rememberOutbound({ messageId, paneId, status, where });
+  rememberOutbound({ messageId, paneId, status, where, fingerprint, options });
 }
 
 if (status === "blocked") {
-  const screen = readScreen();
+  // Herdr can fire while the pane is still redrawing, so settle the read first.
+  const screen = await readScreenSettled(readScreen, { sleep });
   if (!blockedIsReal(screen)) {
-    console.log(`skipped · ${where} · blocked but no dialog on screen`);
+    console.log(`skipped · ${where} · ${blockedSkipReason(screen)} · ${skipTrace(screen)}`);
     process.exit(0);
   }
 
   const delayMs = blockedDelayMs();
+  // The panel gets the same gate as the Telegram ping: no menu on screen means
+  // no buttons anywhere, only free text.
+  const panelOptions = dialogChoices(screen, { hookAuthoritative });
+  const fingerprint = hookAuthoritative ? undefined : dialogFingerprint(screen);
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
     // time out and fall through to Telegram. If the user is (or arrives) at
@@ -175,9 +264,10 @@ if (status === "blocked") {
     }
     const started = markBlockedDelay(paneId);
     const outcome = await runPanel({
-      options: parseBlockedOptions(screen),
+      options: panelOptions,
       body: blockedSnippet(screen),
       timeoutMs: delayMs,
+      fingerprint,
     });
     if (outcome === "handled" || outcome === "superseded" || outcome === "resolved") {
       process.exit(0);
@@ -188,7 +278,7 @@ if (status === "blocked") {
         await sleep(remaining);
       }
     }
-    const later = readScreen();
+    const later = await readScreenSettled(readScreen, { sleep });
     if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
       process.exit(0);
     }
@@ -199,7 +289,7 @@ if (status === "blocked") {
   if (delayMs > 0) {
     const started = markBlockedDelay(paneId);
     await sleep(delayMs);
-    const later = readScreen();
+    const later = await readScreenSettled(readScreen, { sleep });
     if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
       process.exit(0);
     }
@@ -208,7 +298,11 @@ if (status === "blocked") {
     await pingTelegram(screen);
   }
   if (usePanel && !shouldDebounce(paneId, "panel:blocked")) {
-    await runPanel({ options: parseBlockedOptions(screen), body: blockedSnippet(screen) });
+    await runPanel({
+      options: panelOptions,
+      body: blockedSnippet(screen),
+      fingerprint,
+    });
   }
   process.exit(0);
 }

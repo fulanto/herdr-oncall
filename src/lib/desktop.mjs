@@ -110,6 +110,19 @@ export function panelLabels(options = []) {
   return options.map((option) => `${option.key}. ${option.label}`.slice(0, 96));
 }
 
+// One poll is not a verdict. A 2 s watch tick can land in the middle of a
+// redraw, so a reason to close the panel has to survive `n` ticks in a row;
+// any tick that disagrees puts the count back to zero.
+export function consecutiveGate(n = 2) {
+  let seen = 0;
+  return {
+    observe(value) {
+      seen = value ? seen + 1 : 0;
+      return seen >= n;
+    },
+  };
+}
+
 function panelPidsPath() {
   return join(stateDir(), "panels.json");
 }

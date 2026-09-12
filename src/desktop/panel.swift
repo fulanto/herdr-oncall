@@ -65,7 +65,7 @@ func placeTopRight(_ window: NSWindow, on screen: NSScreen, margin: CGFloat = 16
   frame.origin.x = min(max(visible.maxX - frame.width - margin, visible.minX), visible.maxX - frame.width)
   frame.origin.y = min(max(visible.maxY - frame.height - margin, visible.minY), visible.maxY - frame.height)
   window.setFrame(frame, display: false)
-  debugLog("screen=\(NSStringFromRect(visible)) frame=\(NSStringFromRect(frame))")
+  debugLog("screen=\(NSStringFromRect(visible)) frame=\(NSStringFromRect(frame)) window=\(window.windowNumber)")
 }
 
 final class Handler: NSObject, NSWindowDelegate {

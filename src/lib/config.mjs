@@ -14,11 +14,13 @@ export function seedConfigEnv() {
   if (!existsSync(dest)) {
     copyFileSync(src, dest);
   }
-  upgradeEnvNotifyOn(dest);
+  upgradeEnvKeys(dest);
   return dest;
 }
 
-function upgradeEnvNotifyOn(envPath) {
+// Keys added after a user's .env was first seeded: append the missing ones, never
+// touch a value they already set.
+function upgradeEnvKeys(envPath) {
   const original = readFileSync(envPath, "utf8");
   let content = original;
   if (!/^NOTIFY_ON=/m.test(content)) {

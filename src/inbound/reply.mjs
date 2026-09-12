@@ -3,12 +3,16 @@ import { dirname, join } from "node:path";
 import {
   consumePairCode,
   currentPaneStatus,
+  dialogFingerprint,
   envFlag,
   extractStartPayload,
   pendingPair,
+  readPaneScreen,
   runHerdr,
+  screenHasLiveDialog,
   sendTelegram,
   stateDir,
+  telegramAnswerCallback,
   upsertEnvValue,
 } from "../lib/index.mjs";
 
@@ -91,6 +95,10 @@ export function rememberOutbound(record, now = Date.now()) {
     paneId: record.paneId,
     status: record.status,
     where: record.where,
+    // What the pane was asking when this ping went out, so a late tap can be
+    // checked against the dialog it was meant for.
+    fingerprint: record.fingerprint,
+    options: record.options,
     at: now,
   };
   writeJson(path, store);
@@ -119,9 +127,20 @@ export function resolveReplyTarget(message, now = Date.now()) {
   const replyId = message?.reply_to_message?.message_id;
   const hit = lookupOutbound(replyId, now);
   if (hit) {
-    return hit;
+    // This reply names the ping it answers, so it is about that ping's dialog.
+    return { ...hit, explicit: true };
   }
-  return lastOutbound(now);
+  const latest = lastOutbound(now);
+  // A bare message is about the pane, not about whatever dialog happened to be
+  // on screen when the last ping went out.
+  return latest ? { ...latest, explicit: false } : undefined;
+}
+
+// Which fingerprint, if any, this reply has to match. Only a reply that named
+// its ping (an explicit Telegram reply, or a button tap) inherits the dialog it
+// was sent for; a bare message must not be refused because that dialog is gone.
+export function replyFingerprint(target) {
+  return target?.explicit ? target.fingerprint : undefined;
 }
 
 export function readOffset() {
@@ -156,56 +175,87 @@ export function isAgentBlockedError(result) {
   return `${result?.stderr || ""} ${result?.stdout || ""}`.toLowerCase().includes("agent_blocked");
 }
 
-export function deliverReply(paneId, text, fallbackStatus) {
-  const live = currentPaneStatus(paneId);
+// A Telegram button lives forever; the dialog it belonged to does not. Before
+// any keypress, check that the pane is still asking the same question — a "1"
+// meant for "delete the draft?" must not land on whatever dialog is up now.
+// The gate is the *ping's* status, not the live one: only a blocked ping is
+// about a dialog, while `pane get` lags often enough that a pane it still calls
+// `working` can already have the next dialog drawn on it.
+// Returns a herdr-shaped failure when the screen moved on, undefined to proceed.
+export function staleDialog(paneId, pingStatus, fingerprint, deps = {}) {
+  if (!fingerprint) {
+    return undefined;
+  }
+  const status = String(pingStatus || "").toLowerCase();
+  if (status && status !== "blocked" && status !== "unknown") {
+    return undefined;
+  }
+  const read = deps.readScreen ?? ((id) => readPaneScreen(id, {}, deps.run ?? runHerdr));
+  const screen = read(paneId);
+  if (!String(screen || "").trim()) {
+    // Cannot read the pane at all: the old behaviour is still the safer one,
+    // because refusing every reply when herdr hiccups is worse than sending.
+    console.log(`fingerprint unverified · ${paneId}`);
+    return undefined;
+  }
+  if (screenHasLiveDialog(screen) && dialogFingerprint(screen) === fingerprint) {
+    return undefined;
+  }
+  return { status: 1, stale: true, stderr: "dialog changed since this ping" };
+}
+
+export function deliverReply(paneId, text, fallbackStatus, options = {}) {
+  const run = options.run ?? runHerdr;
+  const live = currentPaneStatus(paneId, run);
   const status = live || fallbackStatus || "unknown";
+  const stale = staleDialog(paneId, fallbackStatus, options.fingerprint, options);
+  if (stale) {
+    return stale;
+  }
   const plan = classifyDelivery(status, text);
   if (plan.mode === "keys") {
-    return runHerdr(["pane", "send-keys", paneId, ...plan.keys]);
+    return run(["pane", "send-keys", paneId, ...plan.keys]);
   }
   if (plan.mode === "text-enter") {
-    const typed = runHerdr(["pane", "send-text", paneId, text]);
+    const typed = run(["pane", "send-text", paneId, text]);
     if (herdrFailed(typed)) {
       return typed;
     }
-    return runHerdr(["pane", "send-keys", paneId, "enter"]);
+    return run(["pane", "send-keys", paneId, "enter"]);
   }
-  const prompted = runHerdr(["agent", "prompt", paneId, text]);
+  const prompted = run(["agent", "prompt", paneId, text]);
   if (isAgentBlockedError(prompted)) {
-    const typed = runHerdr(["pane", "send-text", paneId, text]);
+    // Herdr just contradicted `pane get`: the pane is blocked after all, so the
+    // status we checked against was stale. Verify the dialog before typing,
+    // otherwise this fallback is a hole straight through the fingerprint.
+    const stale = staleDialog(paneId, fallbackStatus, options.fingerprint, options);
+    if (stale) {
+      return stale;
+    }
+    const typed = run(["pane", "send-text", paneId, text]);
     if (herdrFailed(typed)) {
       return typed;
     }
-    return runHerdr(["pane", "send-keys", paneId, "enter"]);
+    return run(["pane", "send-keys", paneId, "enter"]);
   }
   return prompted;
 }
 
-export async function telegramGetUpdates(token, offset) {
-  const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
-  if (offset) {
-    url.searchParams.set("offset", String(offset));
-  }
-  url.searchParams.set("timeout", "25");
-  url.searchParams.set("allowed_updates", JSON.stringify(["message", "callback_query"]));
-  const response = await fetch(url, { signal: AbortSignal.timeout(35_000) });
-  const json = await response.json();
-  if (!json.ok) {
-    throw new Error(json.description || "telegram getUpdates failed");
-  }
-  return json.result || [];
-}
-
-export async function handleTelegramUpdate(update, { token, chatId }) {
+// `deps` carries the Telegram and herdr edges (`send`, `answer`, `run`) so the
+// whole path can be exercised without a network or a live pane; the poller
+// passes only the token and chat id and gets the real ones.
+export async function handleTelegramUpdate(update, deps = {}) {
+  const { token, chatId } = deps;
+  const send = deps.send ?? sendTelegram;
   if (update?.callback_query) {
-    return handleCallback(update.callback_query, { token, chatId });
+    return handleCallback(update.callback_query, deps);
   }
   const message = update?.message;
   if (!message?.text) {
     return { skipped: "no-text" };
   }
   const text = message.text.trim();
-  const paired = await maybePair(message, text, token);
+  const paired = await maybePair(message, text, token, send);
   if (paired) {
     return paired;
   }
@@ -214,7 +264,7 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
   }
   if (!text || text.startsWith("/")) {
     if (text === "/start" || text.startsWith("/start@") || text === "/help") {
-      await sendTelegram(
+      await send(
         token,
         chatId,
         "Blocked: tap a choice or type one. Done: send a new instruction.",
@@ -225,13 +275,13 @@ export async function handleTelegramUpdate(update, { token, chatId }) {
   }
   const target = resolveReplyTarget(message);
   if (!target?.paneId) {
-    await sendTelegram(token, chatId, "Reply to a ping so I know which pane.", { forceReply: false });
+    await send(token, chatId, "Reply to a ping so I know which pane.", { forceReply: false });
     return { skipped: "no-target" };
   }
-  return finishDelivery(target, text, { token, chatId });
+  return finishDelivery(target, text, deps);
 }
 
-async function maybePair(message, text, token) {
+async function maybePair(message, text, token, send = sendTelegram) {
   const looksLikePair = Boolean(extractStartPayload(text)) || Boolean(pendingPair() && /^[A-Z0-9]{6,12}$/i.test(text));
   if (!looksLikePair) {
     return undefined;
@@ -240,7 +290,7 @@ async function maybePair(message, text, token) {
   const chat = message.chat?.id;
   if (!result.ok) {
     if (chat && result.reason !== "no-pending") {
-      await sendTelegram(token, chat, "pair code mismatch or expired. run pair on the host again.", {
+      await send(token, chat, "pair code mismatch or expired. run pair on the host again.", {
         forceReply: false,
       });
     }
@@ -250,12 +300,15 @@ async function maybePair(message, text, token) {
     return { skipped: "pair-no-chat" };
   }
   const envPath = upsertEnvValue("TELEGRAM_CHAT_ID", chat);
-  await sendTelegram(token, chat, "paired · this machine will send oncall here", { forceReply: false });
+  await send(token, chat, "paired · this machine will send oncall here", { forceReply: false });
   console.log(`paired chat=${chat} env=${envPath}`);
   return { ok: true, paired: String(chat) };
 }
 
-async function handleCallback(query, { token, chatId }) {
+async function handleCallback(query, deps) {
+  const { token, chatId } = deps;
+  const send = deps.send ?? sendTelegram;
+  const answer = deps.answer ?? telegramAnswerCallback;
   const chat = query?.message?.chat?.id ?? query?.from?.id;
   if (chat !== undefined && String(chat) !== String(chatId) && String(query?.from?.id) !== String(chatId)) {
     console.log(`callback chat mismatch got=${chat} want=${chatId}`);
@@ -265,35 +318,37 @@ async function handleCallback(query, { token, chatId }) {
   if (!text) {
     return { skipped: "no-data" };
   }
-  const target = lookupOutbound(query?.message?.message_id) || lastOutbound();
+  // A tap always names its own message, so an id we do not know is not a reason
+  // to fall back to the most recent ping and press a key into some other pane.
+  const record = lookupOutbound(query?.message?.message_id);
+  const target = record ? { ...record, explicit: true } : undefined;
   console.log(`callback data=${text} pane=${target?.paneId || "none"}`);
-  await answerCallbackQuery(token, query.id, target?.paneId ? "sending" : "no pane");
+  await answer(token, query.id, target?.paneId ? "sending" : "no pane");
   if (!target?.paneId) {
-    await sendTelegram(token, chatId, "no pane mapped for that button", { forceReply: false });
+    await send(token, chatId, "no pane mapped for that button", { forceReply: false });
     return { skipped: "no-target" };
   }
-  return finishDelivery(target, text, { token, chatId });
+  return finishDelivery(target, text, deps);
 }
 
-async function finishDelivery(target, text, { token, chatId }) {
-  const result = deliverReply(target.paneId, text, target.status);
+async function finishDelivery(target, text, deps) {
+  const { token, chatId } = deps;
+  const send = deps.send ?? sendTelegram;
+  const result = deliverReply(target.paneId, text, target.status, {
+    fingerprint: replyFingerprint(target),
+    run: deps.run,
+  });
+  if (result?.stale) {
+    const ack = `stale · ${target.where || target.paneId} · dialog changed, not sent`;
+    await send(token, chatId, ack, { forceReply: false });
+    return { ok: false, stale: true, paneId: target.paneId };
+  }
   const ok = !herdrFailed(result);
   const ack = ok
     ? `sent · ${target.where || target.paneId}`
     : `failed · ${target.where || target.paneId}\n${herdrErrorText(result)}`;
-  await sendTelegram(token, chatId, ack, { forceReply: false });
+  await send(token, chatId, ack, { forceReply: false });
   return { ok, paneId: target.paneId, mode: classifyDelivery(target.status, text).mode };
-}
-
-async function answerCallbackQuery(token, id, text) {
-  if (!id) {
-    return;
-  }
-  await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ callback_query_id: id, text, show_alert: false }),
-  }).catch(() => {});
 }
 
 export function pollEnabled() {

@@ -4,17 +4,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  agentDetectionSkipped,
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
+  consecutiveGate,
+  decideBlockedReal,
+  dialogChoices,
+  dialogFingerprint,
   doneSnippet,
   extractAgentStatus,
+  extractDetectionSkipped,
   extractReadText,
   formatMessage,
   markBlockedDelay,
   notifyStatuses,
   optionKeyboard,
   parseBlockedOptions,
+  readScreenSettled,
   screenHasLiveDialog,
   seedConfigEnv,
   shouldNotify,
@@ -499,4 +506,229 @@ $ rm -rf -- /tmp/draft
   const text = blockedSnippet(screen);
   assert.match(text, /^Would you like to run/);
   assert.doesNotMatch(text, /assistant output above/);
+});
+
+test("only a real keystroke in parentheses becomes a send key", () => {
+  // "(default)" used to pass the old "alphanumeric and short" rule, so tapping
+  // that button typed the word "default" into the pane.
+  const screen = [
+    "⏺ Edit(src/app.ts)",
+    "",
+    "  Do you want to make this edit?",
+    "  ❯ 1. Yes (default)",
+    "    2. Yes, allow all edits during this session (shift+tab)",
+    "    3. No (esc)",
+    "",
+    "  Esc to cancel",
+  ].join("\n");
+  assert.deepEqual(parseBlockedOptions(screen), [
+    { key: "1", send: "1", label: "Yes (default)" },
+    { key: "2", send: "2", label: "Yes, allow all edits during this session (shift+tab)" },
+    { key: "3", send: "esc", label: "No" },
+  ]);
+
+  // Codex's real shortcuts still survive.
+  const codex = parseBlockedOptions(`Would you like to run the following command?
+$ rm -rf -- /tmp/draft
+> 1. Yes, proceed (y)
+2. Yes, and don't ask again (p)
+3. No (esc)`);
+  assert.deepEqual(
+    codex.map((item) => item.send),
+    ["y", "p", "esc"],
+  );
+  assert.deepEqual(
+    codex.map((item) => item.label),
+    ["Yes, proceed", "Yes, and don't ask again", "No"],
+  );
+});
+
+const FINGERPRINT_DIALOG = [
+  "⏺ Bash(rm -rf -- /tmp/draft)",
+  "",
+  "  Do you want to proceed?",
+  "  ❯ 1. Yes",
+  "    2. No",
+  "",
+  "  Esc to cancel · Tab to amend",
+];
+
+test("dialogFingerprint survives the spinner but not a changed choice", () => {
+  const first = dialogFingerprint(
+    [...FINGERPRINT_DIALOG, "✽ Thinking… (12s · ↓ 1.2k tokens)", "  ➜ repo git:(main) ctx:33% Opus 5"].join("\n"),
+  );
+  const later = dialogFingerprint(
+    [...FINGERPRINT_DIALOG, "✽ Determining… (58s · ↓ 9.9k tokens)", "  ➜ repo git:(main) ctx:41% Opus 5"].join("\n"),
+  );
+  assert.equal(typeof first, "string");
+  assert.equal(first.length, 16);
+  assert.equal(first, later, "only the dialog region is hashed");
+
+  const relabelled = [...FINGERPRINT_DIALOG];
+  relabelled[4] = "    2. No, and tell Claude what to do differently";
+  assert.notEqual(dialogFingerprint(relabelled.join("\n")), first);
+
+  const requestioned = [...FINGERPRINT_DIALOG];
+  requestioned[2] = "  Do you want to delete the branch?";
+  assert.notEqual(dialogFingerprint(requestioned.join("\n")), first);
+
+  assert.equal(dialogFingerprint("⏺ nothing is being asked here\n"), undefined);
+  assert.equal(dialogFingerprint(""), undefined);
+});
+
+test("two approvals that differ only in the command hash differently", () => {
+  // Claude Code asks the same question with the same choices for every Bash
+  // call: if the body is not hashed, a tap meant for the draft deletion is
+  // accepted for the force-push that replaced it.
+  const draft = dialogFingerprint(FINGERPRINT_DIALOG.join("\n"));
+  const forced = [...FINGERPRINT_DIALOG];
+  forced[0] = "⏺ Bash(git push --force)";
+  assert.notEqual(dialogFingerprint(forced.join("\n")), draft);
+});
+
+test("moving the selection marker between options does not change the dialog", () => {
+  // Arrowing down redraws the same question with ❯ on another line. The options
+  // are already hashed as key|label, so the body must be hashed without them —
+  // otherwise merely looking at choice 2 would invalidate the ping.
+  const first = dialogFingerprint(FINGERPRINT_DIALOG.join("\n"));
+  const moved = [...FINGERPRINT_DIALOG];
+  moved[3] = "    1. Yes";
+  moved[4] = "  ❯ 2. No";
+  assert.equal(dialogFingerprint(moved.join("\n")), first);
+
+  // And a re-wrapped option (same text, different line breaks) is still it.
+  const rewrapped = [...FINGERPRINT_DIALOG];
+  rewrapped[3] = "  ❯ 1.  Yes";
+  assert.equal(dialogFingerprint(rewrapped.join("\n")), first);
+});
+
+test("decideBlockedReal trusts herdr only when a hook owns detection", () => {
+  assert.equal(
+    decideBlockedReal({ screenLive: true, detectionSkipped: undefined, stillBlocked: false }),
+    "screen",
+  );
+  assert.equal(
+    decideBlockedReal({ screenLive: false, detectionSkipped: true, stillBlocked: true }),
+    "hook-authoritative",
+  );
+  // The integration owns the state but says the pane moved on.
+  assert.equal(decideBlockedReal({ screenLive: false, detectionSkipped: true, stillBlocked: false }), false);
+  // Screen-detected agents keep the old, stricter rule.
+  assert.equal(decideBlockedReal({ screenLive: false, detectionSkipped: false, stillBlocked: true }), false);
+  // Older herdr has no such field, and undefined must not read as true.
+  assert.equal(decideBlockedReal({ screenLive: false, detectionSkipped: undefined, stillBlocked: true }), false);
+});
+
+test("a blank screen is never evidence of a block", () => {
+  // Codex clears the pane the moment a dialog is answered and herdr can still
+  // emit `blocked` into that gap. After the retries in readScreenSettled an
+  // empty pane is a redraw or a dead pane, and an empty panel helps nobody —
+  // so herdr's own status no longer rescues it.
+  assert.equal(decideBlockedReal({ screenReadable: false, liveStatus: "blocked" }), false);
+  assert.equal(decideBlockedReal({ screenReadable: false, liveStatus: undefined }), false);
+  assert.equal(decideBlockedReal({ screenReadable: false, liveStatus: "working" }), false);
+});
+
+test("a blank pane read is retried before it is believed", async () => {
+  const sleeps = [];
+  const wait = async (ms) => {
+    sleeps.push(ms);
+  };
+
+  const screens = ["", "   ", "Do you want to proceed?"];
+  let reads = 0;
+  const settled = await readScreenSettled(() => screens[reads++], { delayMs: 500, sleep: wait });
+  assert.equal(settled, "Do you want to proceed?");
+  assert.equal(reads, 3, "stops as soon as the pane has drawn something");
+  assert.deepEqual(sleeps, [500, 500], "waits between blank reads, not after the good one");
+
+  sleeps.length = 0;
+  let blanks = 0;
+  const empty = await readScreenSettled(
+    () => {
+      blanks++;
+      return "";
+    },
+    { attempts: 4, delayMs: 250, sleep: wait },
+  );
+  assert.equal(empty, "");
+  assert.equal(blanks, 4);
+  assert.deepEqual(sleeps, [250, 250, 250], "no trailing sleep once the attempts run out");
+
+  sleeps.length = 0;
+  assert.equal(await readScreenSettled(() => "up", { sleep: wait }), "up");
+  assert.deepEqual(sleeps, [], "a pane that reads cleanly costs nothing");
+});
+
+test("consecutiveGate needs the same answer twice in a row", () => {
+  const gate = consecutiveGate(2);
+  assert.equal(gate.observe(true), false, "one poll can land mid-redraw");
+  assert.equal(gate.observe(true), true);
+  const reset = consecutiveGate(2);
+  assert.equal(reset.observe(true), false);
+  assert.equal(reset.observe(false), false, "a disagreeing tick starts the count over");
+  assert.equal(reset.observe(true), false);
+  assert.equal(reset.observe(true), true);
+});
+
+test("dialogChoices gives a hook-authoritative block no buttons at all", () => {
+  const menu = [
+    "⏺ Bash(rm -rf -- /tmp/draft)",
+    "",
+    "  Do you want to proceed?",
+    "  ❯ 1. Yes",
+    "    2. No",
+    "",
+    "  Esc to cancel",
+  ].join("\n");
+  assert.deepEqual(
+    dialogChoices(menu).map((option) => option.send),
+    ["1", "2"],
+  );
+  assert.deepEqual(dialogChoices(menu, { hookAuthoritative: true }), []);
+  // The y/n fallback is the dangerous one: a printed "(y/n)" with no dialog on
+  // screen would otherwise put Yes/No on the panel of an agent taking free text.
+  const printed = "hook-owned agent is waiting\nit mentioned (y/n) earlier in its output\n";
+  assert.equal(dialogChoices(printed).length, 2);
+  assert.deepEqual(dialogChoices(printed, { hookAuthoritative: true }), []);
+});
+
+test("agentDetectionSkipped reads the hook-owned flag from either herdr shape", () => {
+  assert.equal(extractDetectionSkipped({ result: { agent: { screen_detection_skipped: true } } }), true);
+  assert.equal(extractDetectionSkipped({ screen_detection_skipped: false }), false);
+  assert.equal(extractDetectionSkipped({ result: { agent: { agent_status: "blocked" } } }), undefined);
+  assert.equal(extractDetectionSkipped(undefined), undefined);
+
+  const got = JSON.stringify({ result: { agent: { pane_id: "wP:p1", screen_detection_skipped: true } } });
+  const listed = JSON.stringify({
+    result: {
+      agents: [
+        { pane_id: "wX:p1", screen_detection_skipped: false },
+        { pane_id: "wP:p1", screen_detection_skipped: true },
+      ],
+    },
+  });
+  assert.equal(
+    agentDetectionSkipped("wP:p1", (args) =>
+      args[1] === "get" ? { status: 0, stdout: got } : { status: 1, stdout: "" },
+    ),
+    true,
+  );
+  // Older herdr prints usage instead of JSON for `agent get`; the list still has it.
+  assert.equal(
+    agentDetectionSkipped("wP:p1", (args) =>
+      args[1] === "list"
+        ? { status: 0, stdout: listed }
+        : { status: 0, stdout: "usage: herdr agent get <target>" },
+    ),
+    true,
+  );
+  assert.equal(
+    agentDetectionSkipped("wX:p1", (args) =>
+      args[1] === "list" ? { status: 0, stdout: listed } : { status: 1, stdout: "" },
+    ),
+    false,
+  );
+  assert.equal(agentDetectionSkipped("wP:p1", () => ({ status: 1, stdout: "", stderr: "boom" })), undefined);
+  assert.equal(agentDetectionSkipped(undefined, () => ({ status: 0, stdout: got })), undefined);
 });
