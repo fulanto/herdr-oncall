@@ -1,9 +1,12 @@
 import { loadDotEnv, seedConfigEnv, sleep, telegramGetUpdates } from "../lib/index.mjs";
-import { writePollerPid } from "../inbound/poller.mjs";
+import { withTimestamps, writePollerPid } from "../inbound/poller.mjs";
 import { handleTelegramUpdate, pollEnabled, readOffset, writeOffset } from "../inbound/reply.mjs";
 
 seedConfigEnv();
 loadDotEnv();
+// This process is detached with its output redirected to <state>/poller.log,
+// so every line needs to say when it happened.
+withTimestamps();
 writePollerPid(process.pid);
 console.log(`oncall poller started pid=${process.pid}`);
 
