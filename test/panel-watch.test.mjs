@@ -14,10 +14,11 @@ function fakePanel(dir) {
   return path;
 }
 
-// The opposite: a panel that exits on TERM but leaves a child holding the pipes
-// it inherited. Node's `close` event waits for those pipes, so resolving on it
-// would park the hook here for the guard timeout. CI caught this as a real
-// failure when a `/bin/sh` other than this machine's orphaned the sleep.
+// The opposite: a panel that quits the moment it starts, leaving a child that
+// still holds the pipes it inherited. Node's `close` waits for those pipes, so
+// resolving on it parks the hook until the stray child ends, and `exit` has
+// already fired by the time the watcher decides — this exact script hung every
+// CI runner for the guard timeout while this machine could not reproduce it.
 function leakyPanel(dir) {
   const path = join(dir, "oncall-panel-leaky");
   writeFileSync(path, "#!/bin/sh\nsh -c 'sleep 30' &\nexit 0\n");

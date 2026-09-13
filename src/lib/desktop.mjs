@@ -212,6 +212,20 @@ export function showPanel({
       stderr += chunk;
     });
     const guard = setTimeout(() => child.kill("SIGTERM"), timeoutMs + 10_000);
+    // When the watcher is the one closing the panel, the reason it found is
+    // already the whole answer: there is no stdout left to want, so it resolves
+    // here rather than waiting for an event. `close` would wait for the pipes
+    // too, which means waiting on anything that inherited them, and `exit` can
+    // already have fired if the panel quit on its own a moment earlier — either
+    // way the Telegram escalation queued behind this would sit there. Every
+    // other outcome still resolves on `close`, where the panel's last line is
+    // the result.
+    const closeByWatch = (reason) => {
+      resolvedByWatch = reason;
+      child.kill("SIGTERM");
+      cleanup();
+      resolve({ kind: "resolved", reason });
+    };
     const watcher =
       typeof until === "function"
         ? setInterval(() => {
@@ -222,8 +236,7 @@ export function showPanel({
               reason = undefined;
             }
             if (reason && resolvedByWatch === undefined) {
-              resolvedByWatch = reason === true ? "moved-on" : String(reason);
-              child.kill("SIGTERM");
+              closeByWatch(reason === true ? "moved-on" : String(reason));
             }
           }, watchMs)
         : undefined;
@@ -240,18 +253,6 @@ export function showPanel({
       cleanup();
       console.error(`panel failed: ${error.message}`);
       resolve({ kind: "unavailable" });
-    });
-    // We asked this panel to close, so its own exit is the whole answer and
-    // there is no stdout left to want. `close` waits for the pipes as well,
-    // which means waiting on anything that inherited them — and the Telegram
-    // escalation queued behind this must not hang on a stray grandchild. Every
-    // other outcome still resolves on `close`, where the panel's last line is
-    // the result.
-    child.on("exit", () => {
-      if (resolvedByWatch) {
-        cleanup();
-        resolve({ kind: "resolved", reason: resolvedByWatch });
-      }
     });
     child.on("close", (code, signal) => {
       cleanup();
