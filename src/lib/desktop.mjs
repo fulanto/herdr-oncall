@@ -241,6 +241,18 @@ export function showPanel({
       console.error(`panel failed: ${error.message}`);
       resolve({ kind: "unavailable" });
     });
+    // We asked this panel to close, so its own exit is the whole answer and
+    // there is no stdout left to want. `close` waits for the pipes as well,
+    // which means waiting on anything that inherited them — and the Telegram
+    // escalation queued behind this must not hang on a stray grandchild. Every
+    // other outcome still resolves on `close`, where the panel's last line is
+    // the result.
+    child.on("exit", () => {
+      if (resolvedByWatch) {
+        cleanup();
+        resolve({ kind: "resolved", reason: resolvedByWatch });
+      }
+    });
     child.on("close", (code, signal) => {
       cleanup();
       const noise = stderr.trim();
