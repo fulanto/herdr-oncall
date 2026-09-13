@@ -20,13 +20,23 @@ export function runHerdr(args) {
   return spawnSync(herdrBin(), args, { encoding: "utf8" });
 }
 
+// Asking the herdr CLI costs a process, and the poller resolves this on every
+// pass of its loop, so the answer to that question is remembered. The env var
+// is still read every time, because Herdr sets it per invocation and tests
+// swing it between temp directories.
+let resolvedConfigDir;
+
 export function configDirPath() {
   if (process.env.HERDR_PLUGIN_CONFIG_DIR) {
     return process.env.HERDR_PLUGIN_CONFIG_DIR;
   }
+  if (resolvedConfigDir) {
+    return resolvedConfigDir;
+  }
   const result = runHerdr(["plugin", "config-dir", PLUGIN_ID]);
   const printed = !result.error && result.status === 0 ? result.stdout.trim() : "";
   if (printed) {
+    resolvedConfigDir = printed;
     return printed;
   }
   const configHome =

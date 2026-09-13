@@ -44,12 +44,12 @@ export function loadDotEnv(path) {
 }
 
 function defaultDotEnvPaths() {
-  const paths = [];
-  if (process.env.HERDR_PLUGIN_CONFIG_DIR) {
-    paths.push(join(process.env.HERDR_PLUGIN_CONFIG_DIR, ".env"));
-  }
-  paths.push(join(pluginRoot, ".env"));
-  return [...new Set(paths)];
+  // `configDirPath()` resolves the directory Herdr would have handed us, asking
+  // the herdr CLI when the env var is absent. Reading the raw env var here
+  // instead meant a process started from a shell — install.sh spawns the poller
+  // that way — found no `.env` at all, so it ran with no token and sat in its
+  // idle loop forever without a word.
+  return [...new Set([join(configDirPath(), ".env"), join(pluginRoot, ".env")])];
 }
 
 function loadDotEnvFile(path) {
