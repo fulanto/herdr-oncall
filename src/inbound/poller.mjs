@@ -64,6 +64,28 @@ export function withTimestamps(target = console, now = () => new Date().toISOStr
   return target;
 }
 
+// Node reports every network failure as the same three words, "fetch failed",
+// and puts the reason in `cause` — sometimes a chain of them. A log line that
+// cannot tell a DNS outage from a refused connection is barely worth writing.
+export function describeError(error, limit = 4) {
+  const parts = [];
+  const seen = new Set();
+  let current = error;
+  while (current !== undefined && current !== null && parts.length < limit && !seen.has(current)) {
+    if (typeof current === "object") {
+      seen.add(current);
+    }
+    const text = typeof current === "string" ? current : current.message || String(current);
+    const code = typeof current === "object" && current.code ? ` (${current.code})` : "";
+    const part = `${text}${code}`.trim();
+    if (part && parts.at(-1) !== part) {
+      parts.push(part);
+    }
+    current = typeof current === "object" ? current.cause : undefined;
+  }
+  return parts.join(" · ") || "unknown error";
+}
+
 // One rotation: a crash loop must not fill the disk, and the tail of the run
 // that died is exactly what you want to read after the restart.
 export function rotatePollerLog(path = pollerLogPath(), maxBytes = LOG_MAX_BYTES) {

@@ -1,5 +1,5 @@
 import { loadDotEnv, seedConfigEnv, sleep, telegramGetUpdates } from "../lib/index.mjs";
-import { withTimestamps, writePollerPid } from "../inbound/poller.mjs";
+import { describeError, withTimestamps, writePollerPid } from "../inbound/poller.mjs";
 import { handleTelegramUpdate, pollEnabled, readOffset, writeOffset } from "../inbound/reply.mjs";
 
 seedConfigEnv();
@@ -44,7 +44,8 @@ while (true) {
       }
     }
   } catch (error) {
-    console.error(error?.message || error);
-    await sleep(error?.message?.includes("Conflict") ? 8000 : 4000);
+    const described = describeError(error);
+    console.error(described);
+    await sleep(described.includes("Conflict") ? 8000 : 4000);
   }
 }

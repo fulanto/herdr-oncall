@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { pollerLogPath, rotatePollerLog, withTimestamps } from "../src/inbound/poller.mjs";
+import { describeError, pollerLogPath, rotatePollerLog, withTimestamps } from "../src/inbound/poller.mjs";
 
 function withStateDir(body) {
   const dir = mkdtempSync(join(tmpdir(), "oncall-pollerlog-"));
@@ -75,4 +75,40 @@ test("every line the poller prints carries the time it happened", () => {
     ["log", "2026-09-13T10:00:00.000Z", "oncall poller started pid=1"],
     ["error", "2026-09-13T10:00:00.000Z", "Conflict: terminated by other getUpdates request"],
   ]);
+});
+
+test("a network failure names its cause, not just 'fetch failed'", () => {
+  // The shape Node hands back when api.telegram.org will not resolve.
+  const dns = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
+    code: "ENOTFOUND",
+  });
+  const failed = Object.assign(new TypeError("fetch failed"), { cause: dns });
+  assert.equal(
+    describeError(failed),
+    "fetch failed · getaddrinfo ENOTFOUND api.telegram.org (ENOTFOUND)",
+  );
+});
+
+test("a plain error still reads as itself", () => {
+  assert.equal(describeError(new Error("Conflict: terminated by other getUpdates request")),
+    "Conflict: terminated by other getUpdates request");
+  assert.equal(describeError("thrown as a string"), "thrown as a string");
+  assert.equal(describeError(undefined), "unknown error");
+});
+
+test("a cause chain is followed, bounded, and survives a cycle", () => {
+  const inner = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  const middle = Object.assign(new Error("socket hang up"), { cause: inner });
+  const outer = Object.assign(new TypeError("fetch failed"), { cause: middle });
+  assert.equal(
+    describeError(outer),
+    "fetch failed · socket hang up · connect ECONNREFUSED (ECONNREFUSED)",
+  );
+
+  const loop = new Error("round");
+  loop.cause = loop;
+  assert.equal(describeError(loop), "round");
+
+  const deep = [1, 2, 3, 4, 5, 6].reduce((cause, n) => Object.assign(new Error(`layer ${n}`), { cause }), undefined);
+  assert.equal(describeError(deep).split(" · ").length, 4);
 });
