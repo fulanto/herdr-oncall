@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { isTerminalBundle, showPanel, userAtPane } from "../src/lib/index.mjs";
+import { isTerminalBundle, panelStderr, showPanel, userAtPane } from "../src/lib/index.mjs";
 
 // A stand-in for the compiled panel: waits until killed, prints nothing, and
 // takes its sleep with it so the test leaves nothing behind.
@@ -97,4 +97,17 @@ test("userAtPane needs the pane focused and a terminal in front", () => {
   assert.equal(userAtPane("w1:p1", { focused: () => false, frontmost: () => "com.termius-dmg.mac" }), false);
   assert.equal(userAtPane("w1:p1", { focused: () => undefined, frontmost: () => "com.termius-dmg.mac" }), false);
   assert.equal(userAtPane("w1:p1", { focused: () => true, frontmost: () => undefined }), true);
+});
+
+test("input-method chatter is dropped, a real panel error is not", () => {
+  // Verbatim from a panel run after it started activating its app so Chinese
+  // input would reach the field.
+  const chatter = [
+    "2026-09-14 14:12:52.051 oncall-panel[34178:26722815] error messaging the mach port for IMKCFRunLoopWakeUpReliable",
+    "2026-09-14 14:12:55.839 oncall-panel[34178:26722815] TSM AdjustCapsLockLEDForKeyTransitionHandling - _ISSetPhysicalKeyboardCapsLockLED Inhibit",
+  ].join("\n");
+  assert.equal(panelStderr(chatter), "");
+  assert.equal(panelStderr(`${chatter}\ndyld: Library not loaded: AppKit`), "dyld: Library not loaded: AppKit");
+  assert.equal(panelStderr(""), "");
+  assert.equal(panelStderr(undefined), "");
 });

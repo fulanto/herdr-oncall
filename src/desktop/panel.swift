@@ -130,7 +130,7 @@ let height = chromeH + bodyH
 
 let panel = PanelWindow(
   contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-  styleMask: [.titled, .closable, .nonactivatingPanel, .utilityWindow, .hudWindow],
+  styleMask: [.titled, .closable, .utilityWindow, .hudWindow],
   backing: .buffered,
   defer: false)
 panel.title = "oncall"
@@ -207,6 +207,13 @@ field.target = handler
 field.action = #selector(Handler.submitted(_:))
 content.addSubview(field)
 
+// An input method follows the *active application*, not whichever window holds
+// the caret. As a `.nonactivatingPanel` that never activated, this field took
+// raw keystrokes — fine for `y` or `1` — while the IME session stayed with the
+// terminal, so there was no way to type Chinese, Japanese or Korean into it.
+// Activating is honest about what the panel already does: it takes the caret,
+// and it only opens when you are not at the pane.
+app.activate(ignoringOtherApps: true)
 panel.makeKeyAndOrderFront(nil)
 // Ordering front can still move a window on some macOS versions; re-assert.
 placeTopRight(panel, on: screen, margin: margin)

@@ -168,6 +168,21 @@ export function closePanelFor(paneId) {
   writePanelPids(store);
 }
 
+// The panel activates its app so an input method will attach to the text field,
+// and macOS answers that by writing input-method chatter to stderr on every
+// open. Logging it verbatim turns a working panel into two error lines per
+// notification, so the known lines are dropped and anything else still surfaces.
+const PANEL_NOISE =
+  /IMKCFRunLoopWakeUpReliable|TSM AdjustCapsLockLED|_ISSetPhysicalKeyboardCapsLockLED|CFRunLoopWakeUp/;
+
+export function panelStderr(text) {
+  return String(text ?? "")
+    .split("\n")
+    .filter((line) => line.trim() && !PANEL_NOISE.test(line))
+    .join("\n")
+    .trim();
+}
+
 // `until` is polled every `watchMs`; when it returns a truthy value the panel
 // is closed and the result is { kind: "resolved", reason } where reason is
 // that value (a string such as "moved-on" or "at-pane").
@@ -256,7 +271,7 @@ export function showPanel({
     });
     child.on("close", (code, signal) => {
       cleanup();
-      const noise = stderr.trim();
+      const noise = panelStderr(stderr);
       if (noise) {
         console.error(noise);
       }

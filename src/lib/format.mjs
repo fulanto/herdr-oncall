@@ -94,13 +94,26 @@ function trailingOptionRun(lines) {
   // the option column ends the run.
   const column = indentOf(lines[bottom]);
   let top = bottom;
+  let lowest = optionNumber(lines[bottom]);
   for (let i = bottom - 1; i >= 0; i--) {
     const line = lines[i];
     if (isOptionLine(line)) {
       top = i;
+      lowest = optionNumber(line) ?? lowest;
       continue;
     }
-    if (isBlank(line) || isChromeLine(line) || isRuleLine(line) || isTurnMarker(line)) {
+    // A multi-question form draws a rule *inside* its choice list — Claude
+    // Code's tabbed form puts "Chat about this" in its own section under the
+    // divider. Cross it only when the line above continues the numbering
+    // downward, so an unrelated list further up is still never pulled in.
+    if (isRuleLine(line)) {
+      const above = lines[i - 1];
+      if (above !== undefined && isOptionLine(above) && optionNumber(above) === lowest - 1) {
+        continue;
+      }
+      break;
+    }
+    if (isBlank(line) || isChromeLine(line) || isTurnMarker(line)) {
       break;
     }
     if (indentOf(line) > column) {
@@ -110,6 +123,11 @@ function trailingOptionRun(lines) {
     break;
   }
   return { start: top, end: bottom + 1 };
+}
+
+function optionNumber(line) {
+  const match = cleanOptionLine(line).match(/^(\d{1,2})[.)、]\s+\S/);
+  return match ? Number(match[1]) : undefined;
 }
 
 // The question owning those choices: the nearest line above them that ends in a
@@ -130,7 +148,10 @@ function questionIndex(lines, options) {
       if (isUserMarker(line) || isRuleLine(line)) {
         break;
       }
-      if (/\?\s*$/.test(line)) {
+      // Fullwidth `？` ends a question written in Chinese or Japanese just as
+      // `?` ends an English one; matching only the ASCII form left a real
+      // question unfound and the snippet with nothing but its choices.
+      if (/[?？]\s*$/.test(line)) {
         return i;
       }
       if (isTurnMarker(line)) {
@@ -146,7 +167,7 @@ function questionIndex(lines, options) {
 // permissions does not win.
 function keywordHeaderIndex(lines) {
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (/(would you like|do you want|allow|permission)[^?]*\?/i.test(lines[i])) {
+    if (/(would you like|do you want|allow|permission)[^?？]*[?？]/i.test(lines[i])) {
       return i;
     }
   }
@@ -321,8 +342,15 @@ function isChromeLine(line) {
   if (/^(idle|done|finished|working|blocked|thinking|ready)\b/i.test(text) && text.length < 24) {
     return true;
   }
+  // Key hints and the spinner footer. `tokens` must carry its count: the bare
+  // word matched any short line that merely mentioned one, and an option whose
+  // description read "任何人可从 ai-assistant 取到 ASR token" was read as a
+  // footer — the walk up the choice list stopped dead there and the ping went
+  // out with the first two options missing.
   if (
-    /\b(tokens?|context window|esc to |press (enter|esc)|ctrl\+|interrupt|shift\+tab)\b/i.test(text) &&
+    /(\b\d+(?:\.\d+)?k?\s*tokens?\b|\bcontext window\b|\besc to \b|\bpress (enter|esc)\b|\bctrl\+|\binterrupt\b|\bshift\+tab\b)/i.test(
+      text,
+    ) &&
     text.length < 96
   ) {
     return true;

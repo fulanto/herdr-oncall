@@ -788,3 +788,120 @@ test("a task list under the prompt box does not hide the dialog above it", () =>
   assert.doesNotMatch(snippet, /4 tasks/);
   assert.doesNotMatch(snippet, /回归测试/);
 });
+
+// A real Claude Code multi-question form, captured live from a pane that had
+// gone `blocked`. Two things about it broke the parser at once: a drawn rule
+// splits the choice list ("Chat about this" lives in its own section under the
+// divider) and the question ends in a fullwidth `？`. Together they left one
+// useless button, "Chat about this", and a snippet with no question in it.
+const TABBED_FORM = `⏺ 探索完毕。当前 /ws/v2/simple_transcribe 走的是 resolveProviderStrict(language, diarization)，只按「语言候选 +
+  asr.default-provider」选供应商，完全没有医院维度。有几个语义决策需要你确认：
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ 参数名  ☒ 优先级  ☐ 私有化供应商  ☐ 透传范围  ✔ Submit  →
+
+│ 医院配置为私有化供应商 70000201_asr（不在任何语言的 providers 列表里）时如何处理？
+
+❯ 1. 直接透传，跳过语言路由（推荐）
+     与现有 resolveProvider 的私有化白名单行为一致，院内数据不会被路由到公有云供应商；若该语言/话者分离不支持，由识别器自身报错
+  2. 按普通供应商处理
+     不在语言候选内就回退到公有云供应商（tencent/xunfei），语言能力校验更严格，但院内医院的音频会出院
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
+
+test("a rule inside the choice list does not cut the run short", () => {
+  assert.deepEqual(
+    parseBlockedOptions(TABBED_FORM).map((option) => `${option.key}:${option.send}`),
+    ["1:1", "2:2", "3:3", "4:4"],
+  );
+});
+
+test("a question ending in a fullwidth mark is still the question", () => {
+  const snippet = blockedSnippet(TABBED_FORM);
+  assert.match(snippet, /医院配置为私有化供应商.*时如何处理？/);
+  // The tab bar rides along, and it is the only thing on screen that says which
+  // of the four questions this is.
+  assert.match(snippet, /☒ 参数名/);
+  assert.match(snippet, /☐ 透传范围/);
+  assert.equal(screenHasLiveDialog(TABBED_FORM), true);
+});
+
+// Constructed, not captured: the Codex shape, where the command sits *below*
+// the question, is what makes finding the question matter — the region starts
+// at it instead of walking up into the tool call. With an ASCII-only test for
+// the question mark, a Chinese question is never found and the block starts in
+// the wrong place.
+const FULLWIDTH_QUESTION = [
+  "⏺ Bash(rm -rf -- /tmp/draft)",
+  "",
+  "是否允许执行该命令？",
+  "",
+  "Environment: production",
+  "Command: rm -rf -- /tmp/draft",
+  "",
+  "1. 允许",
+  "2. 拒绝",
+  "",
+  "Esc to cancel",
+].join("\n");
+
+test("a fullwidth question anchors the block the way an ASCII one does", () => {
+  const snippet = blockedSnippet(FULLWIDTH_QUESTION);
+  assert.ok(snippet.startsWith("是否允许执行该命令？"), snippet);
+  assert.match(snippet, /Command: rm -rf/);
+  assert.doesNotMatch(snippet, /⏺ Bash/);
+  assert.deepEqual(
+    parseBlockedOptions(FULLWIDTH_QUESTION).map((option) => option.label),
+    ["允许", "拒绝"],
+  );
+});
+
+// Reconstructed from a screenshot of a real pane (the form had already been
+// answered by the time it could be read back). What matters is verbatim: two
+// option descriptions mention "token", and the footer heuristic used to treat
+// any short line containing that word as chrome — so the walk up the choice
+// list stopped at the first one and the ping went out with options 1 and 2
+// missing, which is what the panel showed.
+const TOKEN_IN_OPTION_TEXT = `⏺ 分支已拉好（ai-assistant 现在在 feature_TRZN-7298，基于最新 origin/master 075235fa，你本地改的两个配置文件原样保留）。代码分析完了，有几个决策点需要你定：
+────────────────────────────────────────────────────────────────────────────────
+←  ☐ APP 鉴权  ☐ asr 侧收紧  ☐ 返回内容  ☐ hospital_code  ✔ Submit  →
+
+ai-assistant 新增的对外取 token 接口用什么鉴权？
+
+› 1. @CheckDoctorTokenParam（推荐）
+     复用现有 AOP，只校验 Authorization 里的医生登录 token，不需要请求体。DoctorFileController 等已在用这个注解
+  2. 不鉴权
+     不加鉴权，任何人可从 ai-assistant 取到 ASR token。等于把 asr-service 现在的开放状态原样搬过来
+  3. 另设签名机制
+     另起一套（如 APP 端专用 appKey/签名），需要新增鉴权代码
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel`;
+
+test("an option that mentions tokens is not mistaken for the footer", () => {
+  assert.deepEqual(
+    parseBlockedOptions(TOKEN_IN_OPTION_TEXT).map((option) => option.key),
+    ["1", "2", "3", "4", "5"],
+  );
+  const snippet = blockedSnippet(TOKEN_IN_OPTION_TEXT);
+  assert.match(snippet, /@CheckDoctorTokenParam/);
+  assert.match(snippet, /不鉴权/);
+});
+
+test("a real spinner footer still counts as chrome", () => {
+  // The shape the heuristic exists for: the count is what makes it a footer.
+  const withFooter = [
+    "Do you want to proceed?",
+    "",
+    "1. Yes",
+    "2. No",
+    "",
+    "✢ Canoodling… (7m 52s · ↓ 17.3k tokens · thinking with xhigh effort)",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(withFooter), true);
+  assert.doesNotMatch(blockedSnippet(withFooter), /Canoodling/);
+});
