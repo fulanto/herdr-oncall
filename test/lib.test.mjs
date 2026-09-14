@@ -732,3 +732,59 @@ test("agentDetectionSkipped reads the hook-owned flag from either herdr shape", 
   assert.equal(agentDetectionSkipped("wP:p1", () => ({ status: 1, stdout: "", stderr: "boom" })), undefined);
   assert.equal(agentDetectionSkipped(undefined, () => ({ status: 0, stdout: got })), undefined);
 });
+
+// A real Claude Code screen, captured from <state>/last-skipped-screen.txt after
+// the panel stopped opening for a pane that had a todo list. The dialog is live
+// and the choices are right there, but the task rows drawn under the prompt box
+// made every check that walks up from the bottom give up.
+const TODO_PANEL_DIALOG = `
+⏺ Listing 2 directories, running 5 shell commands…
+  ⎿  $ export PATH="$(dirname "$(which node)"):$PATH";
+     OPENCLAW_DECK_RENDERER_NODE_PATH=/tmp/deck-renderer-node/node_modules
+     OPENCLAW_DATABASE_URL="sqlite+aiosqlite:///:memory:" ./.venv/bin/python -m pytest
+     tests/ -q 2>&1 | tail -6
+
+──────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+
+   │ export PATH="$(dirname "$(which node)"):$PATH";
+   │ OPENCLAW_DECK_RENDERER_NODE_PATH=/tmp/deck-renderer-node/node_modules
+   │ OPENCLAW_DATABASE_URL="sqlite+aiosqlite:///:memory:" ./.venv/bin/python -m pytest
+   │ tests/ -q 2>&1 | tail -6
+   Run tests/ with real node_modules
+
+ Contains shell syntax (string) that cannot be statically analyzed
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and switch to auto mode · auto mode handles these prompts for you
+   3. No
+
+ Esc to cancel · Tab to amend
+
+  4 tasks (3 done, 1 in progress, 0 open)
+  ✔ 拆出 DeckSpecAuthor 独立写稿调用
+  ✔ build_slides_deck 改收 brief，修复轮移进工具内部
+  ✔ 回退主 agent 的 effort/预算与契约注入
+  ◼ 回归测试 + 重新实测端到端`;
+
+test("a task list under the prompt box does not hide the dialog above it", () => {
+  assert.equal(screenHasLiveDialog(TODO_PANEL_DIALOG), true);
+  assert.deepEqual(
+    parseBlockedOptions(TODO_PANEL_DIALOG).map((option) => `${option.key}:${option.send}:${option.label}`),
+    [
+      "1:1:Yes",
+      "2:2:Yes, and switch to auto mode · auto mode handles these prompts for you",
+      "3:3:No",
+    ],
+  );
+  const snippet = blockedSnippet(TODO_PANEL_DIALOG);
+  // The tool call and the reason come with the question, and none of the task
+  // rows do.
+  assert.match(snippet, /Bash command/);
+  assert.match(snippet, /Contains shell syntax/);
+  assert.match(snippet, /Do you want to proceed\?/);
+  assert.doesNotMatch(snippet, /4 tasks/);
+  assert.doesNotMatch(snippet, /回归测试/);
+});

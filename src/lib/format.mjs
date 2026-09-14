@@ -332,6 +332,18 @@ function isChromeLine(line) {
   if (/\bctx:\d+%/.test(text) || /^»\s/.test(text)) {
     return true;
   }
+  // Claude Code's task list, drawn under the prompt box and so *below* a live
+  // dialog: a "4 tasks (3 done, 1 in progress, 0 open)" summary and one
+  // glyph-led row per task. Counting those rows as content is what made a real
+  // permission prompt read as one merely quoted in the transcript — the panel
+  // stopped opening for any pane with a todo list, and the options went missing
+  // with it, since the choice run is found by walking up past the chrome.
+  if (/^\d+\s+tasks?\s*\(/i.test(text)) {
+    return true;
+  }
+  if (/^[✔✓☑◼◻☐■□▪▫]\s+\S/.test(text)) {
+    return true;
+  }
   if (/^[❯›▸$]\s*$/.test(text) || /^codex>\s*$/i.test(text)) {
     return true;
   }
