@@ -17,6 +17,7 @@ import {
   extractDetectionSkipped,
   extractReadText,
   formatMessage,
+  nextDialog,
   markBlockedDelay,
   notifyStatuses,
   optionKeyboard,
@@ -904,4 +905,82 @@ test("a real spinner footer still counts as chrome", () => {
   ].join("\n");
   assert.equal(screenHasLiveDialog(withFooter), true);
   assert.doesNotMatch(blockedSnippet(withFooter), /Canoodling/);
+});
+
+// A multi-question form advances in place: the status never leaves `blocked`,
+// so Herdr sends no second event and the panel has to find the next question
+// itself.
+function formTab(question, first, second) {
+  return [
+    "←  ☒ 参数名  ☐ 透传范围  ✔ Submit  →",
+    "",
+    question,
+    "",
+    `❯ 1. ${first}`,
+    `  2. ${second}`,
+    "",
+    "Enter to select · Esc to cancel",
+  ].join("\n");
+}
+
+test("the panel follows a form to the question that replaces the one answered", async () => {
+  const one = formTab("参数名用哪个？", "hospital_code", "hospitalCode");
+  const two = formTab("透传范围到哪一层？", "只到网关", "一路透传");
+  const answered = dialogFingerprint(one);
+  const seen = [one, one, two];
+  let reads = 0;
+  const slept = [];
+  const next = await nextDialog({
+    read: () => seen[Math.min(reads++, seen.length - 1)],
+    status: () => "blocked",
+    answered,
+    wait: async (ms) => slept.push(ms),
+  });
+  assert.equal(next.fingerprint, dialogFingerprint(two));
+  assert.match(next.screen, /透传范围到哪一层/);
+  // It waited out the two reads that still showed the answered question.
+  assert.equal(slept.length, 3);
+});
+
+test("a form that ends gives up instead of reopening the panel", async () => {
+  const one = formTab("参数名用哪个？", "hospital_code", "hospitalCode");
+  // Submitted: the dialog is gone and the agent is working again.
+  const next = await nextDialog({
+    read: () => "⏺ Running tests…\n\n  ⎿  $ pytest -q",
+    status: () => "working",
+    answered: dialogFingerprint(one),
+    wait: async () => {},
+  });
+  assert.equal(next, undefined);
+});
+
+test("a screen that never changes runs out of attempts rather than looping", async () => {
+  const one = formTab("参数名用哪个？", "hospital_code", "hospitalCode");
+  let reads = 0;
+  const next = await nextDialog({
+    read: () => {
+      reads++;
+      return one;
+    },
+    status: () => "blocked",
+    answered: dialogFingerprint(one),
+    attempts: 4,
+    wait: async () => {},
+  });
+  assert.equal(next, undefined);
+  assert.equal(reads, 4);
+});
+
+test("a blank read mid-redraw does not end the follow-on", async () => {
+  const two = formTab("透传范围到哪一层？", "只到网关", "一路透传");
+  const seen = ["", "   ", two];
+  let reads = 0;
+  const next = await nextDialog({
+    read: () => seen[Math.min(reads++, seen.length - 1)],
+    // Herdr's detection lags the redraw and briefly reports nothing at all.
+    status: () => undefined,
+    answered: "an-older-fingerprint",
+    wait: async () => {},
+  });
+  assert.equal(next.fingerprint, dialogFingerprint(two));
 });

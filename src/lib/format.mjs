@@ -1,7 +1,43 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { stripAnsi } from "./herdr.mjs";
+import { sleep } from "./paths.mjs";
 import { worktreeFrom, worktreeLabel, worktreeShortName } from "./worktree.mjs";
+
+// Answering one question of a multi-question form does not end the pane's wait:
+// the form advances to its next tab in place, the status never leaves `blocked`,
+// and so Herdr fires no event at all. A hook that exits after delivering its
+// answer takes the panel with it and leaves the rest of the form to the
+// terminal. Poll for the question that replaces the one just answered.
+//
+// The screen decides, not the status: Herdr's detection lags a redraw, and a
+// pane it briefly calls `working` can already have the next question drawn.
+export async function nextDialog({
+  read,
+  status,
+  answered,
+  attempts = 16,
+  delayMs = 500,
+  wait = sleep,
+}) {
+  for (let i = 0; i < attempts; i++) {
+    await wait(delayMs);
+    const screen = await read();
+    if (String(screen ?? "").trim() && screenHasLiveDialog(screen)) {
+      const fingerprint = dialogFingerprint(screen);
+      if (fingerprint && fingerprint !== answered) {
+        return { screen, fingerprint };
+      }
+      // The same question is still on screen; the redraw has not landed yet.
+      continue;
+    }
+    const live = status?.();
+    if (live && live !== "blocked") {
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 export function paneIdFrom(event, context) {
   const raw =

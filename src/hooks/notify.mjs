@@ -16,6 +16,7 @@ import {
   loadDotEnv,
   markBlockedDelay,
   modeEnabled,
+  nextDialog,
   optionKeyboard,
   paneIdFrom,
   panelAvailable,
@@ -70,6 +71,10 @@ if (worktree) {
 const where = formatWhere(context, event);
 const title = statusTitle(context, event, status);
 const isDone = status === "done" || status === "finish";
+
+// A form has a handful of tabs. The cap is only a backstop against a dialog
+// that keeps changing shape without ever being satisfied.
+const MAX_FORM_ANSWERS = 12;
 
 function readScreen() {
   if (status === "blocked") {
@@ -199,15 +204,28 @@ function panelShouldClose() {
   return false;
 }
 
-// Returns "handled" | "resolved" | "at-pane" | "superseded" | "unavailable" |
-// "timeout" | "dismiss" | "skipped".
+// Returns "handled" | "resolved" | "at-pane" | "superseded" | "yielded" |
+// "unavailable" | "timeout" | "dismiss" | "skipped".
 async function runPanel({ options, body, timeoutMs, fingerprint }) {
   if (userAtPane(paneId)) {
     console.log(`panel skipped · ${where} · pane is on screen`);
     return "skipped";
   }
   console.log(`panel · ${title} · ${where}`);
-  const result = await showPanel({ paneId, title, where, body, options, timeoutMs, until: panelShouldClose });
+  const result = await showPanel({
+    paneId,
+    title,
+    where,
+    body,
+    options,
+    timeoutMs,
+    until: panelShouldClose,
+    kind: status === "blocked" ? "blocked" : "report",
+  });
+  if (result.kind === "yielded") {
+    console.log(`panel yielded · ${where} · a question is already on screen`);
+    return "yielded";
+  }
   if (result.kind === "button") {
     const option = options[result.index];
     deliverFromPanel(option?.send ?? String(result.index + 1), fingerprint);
@@ -263,12 +281,41 @@ if (status === "blocked") {
       process.exit(0);
     }
     const started = markBlockedDelay(paneId);
-    const outcome = await runPanel({
-      options: panelOptions,
-      body: blockedSnippet(screen),
-      timeoutMs: delayMs,
-      fingerprint,
-    });
+    // A multi-question form answers one tab at a time and never leaves
+    // `blocked`, so Herdr sends no second event: without following it here, the
+    // panel would deliver one answer and vanish, leaving the rest of the form to
+    // the terminal. Each answer is followed by whatever question replaces it.
+    let live = { screen, options: panelOptions, fingerprint };
+    let outcome;
+    for (let answered = 0; ; answered++) {
+      outcome = await runPanel({
+        options: live.options,
+        body: blockedSnippet(live.screen),
+        timeoutMs: delayMs,
+        fingerprint: live.fingerprint,
+      });
+      if (outcome !== "handled" || hookAuthoritative) {
+        break;
+      }
+      if (answered + 1 >= MAX_FORM_ANSWERS) {
+        console.log(`panel stopped following · ${where} · ${MAX_FORM_ANSWERS} answers`);
+        process.exit(0);
+      }
+      const next = await nextDialog({
+        read: () => readScreen(),
+        status: () => currentPaneStatus(paneId),
+        answered: live.fingerprint,
+      });
+      if (!next) {
+        process.exit(0);
+      }
+      console.log(`panel follows on · ${where}`);
+      live = {
+        screen: next.screen,
+        options: dialogChoices(next.screen, { hookAuthoritative: false }),
+        fingerprint: next.fingerprint,
+      };
+    }
     if (outcome === "handled" || outcome === "superseded" || outcome === "resolved") {
       process.exit(0);
     }

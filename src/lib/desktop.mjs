@@ -140,32 +140,64 @@ function writePanelPids(store) {
   writeFileSync(panelPidsPath(), JSON.stringify(store), "utf8");
 }
 
-export function rememberPanel(paneId, pid) {
+// panels.json maps a pane to the panel standing on it. Older builds wrote a
+// bare pid, so both shapes are read.
+function panelRecord(entry) {
+  if (entry === undefined || entry === null) {
+    return undefined;
+  }
+  if (typeof entry === "object") {
+    const pid = Number(entry.pid ?? 0);
+    return pid > 1 ? { pid, kind: entry.kind } : undefined;
+  }
+  const pid = Number(entry);
+  return pid > 1 ? { pid, kind: undefined } : undefined;
+}
+
+export function rememberPanel(paneId, pid, kind) {
   const store = readPanelPids();
-  store[paneId] = pid;
+  store[paneId] = { pid, kind };
   writePanelPids(store);
 }
 
 export function forgetPanel(paneId, pid) {
   const store = readPanelPids();
-  if (pid === undefined || Number(store[paneId]) === Number(pid)) {
+  const record = panelRecord(store[paneId]);
+  if (pid === undefined || Number(record?.pid) === Number(pid)) {
     delete store[paneId];
     writePanelPids(store);
   }
 }
 
-export function closePanelFor(paneId) {
+// A panel asking a question outranks one that is only reporting. Claude Code
+// can emit `blocked` and `done` for the same pane inside one second, and with
+// eviction keyed on the pane alone the done panel took the blocked panel's
+// place: the question the user actually had to answer vanished, its hook exited
+// as superseded without even falling through to Telegram, and the next chance
+// to see it was the next event. Returns false when the caller must stand down.
+export function panelOutranks(standing, incoming) {
+  if (standing === undefined) {
+    return true;
+  }
+  return incoming === "blocked" || standing !== "blocked";
+}
+
+export function closePanelFor(paneId, kind) {
   const store = readPanelPids();
-  const pid = Number(store[paneId] ?? 0);
-  if (pid > 1 && pid !== process.pid) {
+  const record = panelRecord(store[paneId]);
+  if (record && record.pid !== process.pid && !panelOutranks(record.kind, kind)) {
+    return false;
+  }
+  if (record && record.pid !== process.pid) {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(record.pid, "SIGTERM");
     } catch {
       /* already gone */
     }
   }
   delete store[paneId];
   writePanelPids(store);
+  return true;
 }
 
 // The panel activates its app so an input method will attach to the text field,
@@ -196,12 +228,13 @@ export function showPanel({
   until,
   watchMs = 2000,
   binary = panelBinaryPath(),
+  kind,
 }) {
   if (!existsSync(binary)) {
     return Promise.resolve({ kind: "unavailable" });
   }
-  if (paneId) {
-    closePanelFor(paneId);
+  if (paneId && !closePanelFor(paneId, kind)) {
+    return Promise.resolve({ kind: "yielded" });
   }
   const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
   const args = [String(timeoutSec), title, where, body || "", ...panelLabels(options)];
@@ -215,7 +248,7 @@ export function showPanel({
       return;
     }
     if (paneId) {
-      rememberPanel(paneId, child.pid);
+      rememberPanel(paneId, child.pid, kind);
     }
     let stdout = "";
     let stderr = "";

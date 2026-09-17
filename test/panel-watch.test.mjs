@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { isTerminalBundle, panelStderr, showPanel, userAtPane } from "../src/lib/index.mjs";
+import { isTerminalBundle, panelOutranks, panelStderr, showPanel, userAtPane } from "../src/lib/index.mjs";
 
 // A stand-in for the compiled panel: waits until killed, prints nothing, and
 // takes its sleep with it so the test leaves nothing behind.
@@ -110,4 +110,55 @@ test("input-method chatter is dropped, a real panel error is not", () => {
   assert.equal(panelStderr(`${chatter}\ndyld: Library not loaded: AppKit`), "dyld: Library not loaded: AppKit");
   assert.equal(panelStderr(""), "");
   assert.equal(panelStderr(undefined), "");
+});
+
+test("a report never takes a question's place", () => {
+  // Claude Code emits blocked and done for one pane inside a second. Keyed on
+  // the pane alone, the done panel evicted the blocked one and the question the
+  // user had to answer disappeared without even reaching Telegram.
+  assert.equal(panelOutranks("blocked", "blocked"), true, "a newer question replaces a stale one");
+  assert.equal(panelOutranks("blocked", "report"), false, "a report must stand down");
+  assert.equal(panelOutranks("report", "blocked"), true, "a question takes a report's place");
+  assert.equal(panelOutranks("report", "report"), true);
+  assert.equal(panelOutranks(undefined, "report"), true, "nothing standing, go ahead");
+  // A panel opened by an older build recorded no kind at all.
+  assert.equal(panelOutranks(undefined, "blocked"), true);
+});
+
+test("a done panel yields to a live blocked panel instead of killing it", { skip: process.platform === "win32" }, async () => {
+  await withPanelState(async (dir) => {
+    const binary = fakePanel(dir);
+    let polls = 0;
+    // A question is up and waiting.
+    const question = showPanel({
+      paneId: "wY:p1",
+      title: "blocked · Test",
+      where: "test",
+      body: "",
+      options: [],
+      timeoutMs: 10_000,
+      until: () => (++polls >= 8 ? "moved-on" : false),
+      watchMs: 50,
+      binary,
+      kind: "blocked",
+    });
+    await new Promise((done) => setTimeout(done, 120));
+
+    const report = await showPanel({
+      paneId: "wY:p1",
+      title: "done · Test",
+      where: "test",
+      body: "the last turn",
+      options: [],
+      timeoutMs: 10_000,
+      until: () => true,
+      watchMs: 50,
+      binary,
+      kind: "report",
+    });
+    assert.deepEqual(report, { kind: "yielded" }, "the report stood down");
+
+    // And the question is still the one standing, answered on its own terms.
+    assert.deepEqual(await question, { kind: "resolved", reason: "moved-on" });
+  });
 });
