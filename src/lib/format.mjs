@@ -113,13 +113,27 @@ export function dialogRegion(lines) {
 // list on the buttons.
 function trailingOptionRun(lines) {
   let bottom = -1;
+  let end = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (isBlank(line) || isRuleLine(line) || isChromeLine(line)) {
       continue;
     }
+    // The last choice's own wrapped tail sits below it, so it is the first
+    // thing this scan meets. It is part of the run, not the end of it: stepping
+    // over it keeps the run findable, and stretching `end` past it keeps the
+    // tail in the region, where `joinWrappedOptions` puts it back on the label.
+    if (isKeyParenthetical(line)) {
+      if (end < 0) {
+        end = i + 1;
+      }
+      continue;
+    }
     if (isOptionLine(line)) {
       bottom = i;
+      if (end < 0) {
+        end = i + 1;
+      }
     }
     break;
   }
@@ -158,7 +172,7 @@ function trailingOptionRun(lines) {
     }
     break;
   }
-  return { start: top, end: bottom + 1 };
+  return { start: top, end };
 }
 
 function optionNumber(line) {
@@ -277,6 +291,19 @@ function isOptionLine(line) {
   return /^\s*[❯›▸>]?\s*\d{1,2}[.)、]\s+\S/.test(cleanOptionLine(line));
 }
 
+// A line that is nothing but a key name in parentheses — "(shift+tab)", "(esc)"
+// — is the tail of the option above it, wrapped by the terminal past the pane
+// width, and never a footer. Claude Code draws "2. Yes, and always allow access
+// to /Users/… for this session (shift+tab)" and breaks it exactly there; while
+// `shift+tab` counted as a key hint, the walk up the choice list stopped dead
+// at the tail and the panel opened with one button ("3. No") while the other
+// two choices sat stranded in the body. A real key hint says what the key
+// *does* ("shift+tab to cycle", "esc to interrupt"), and the space that takes
+// is what tells the two apart.
+function isKeyParenthetical(line) {
+  return /^\(\s*[A-Za-z0-9]+(?:\+[A-Za-z0-9]+)*\s*\)$/.test(String(line).trim());
+}
+
 // Stop before the spinner, prompt box, or status line that the visible screen
 // carries below a dialog with no numbered options.
 function dialogEndIndex(lines, header) {
@@ -328,14 +355,27 @@ export function doneSnippet(screen, limit = 40) {
       userIdx = i;
     }
   }
-  let body = userIdx >= 0 && userIdx < lines.length - 1 ? lines.slice(userIdx + 1) : lines.slice(-limit);
-  while (body.length && (isUserMarker(body.at(-1)) || isChromeLine(body.at(-1)))) {
-    body.pop();
+  let body = trimBodyTail(userIdx >= 0 ? lines.slice(userIdx + 1) : []);
+  // Nothing left under that "user turn" means it was the prompt box, not a
+  // message: Claude Code draws the box as "❯ <whatever is typed>", which reads
+  // exactly like a turn the user sent, and below it there is only chrome. Fall
+  // back to the tail so the ping carries the agent's answer rather than
+  // whatever survived underneath the box.
+  if (!body.length) {
+    body = trimBodyTail(lines.slice(-limit));
   }
   if (body.length > limit) {
     body = body.slice(-limit);
   }
   return capSnippet(body.join("\n").trim());
+}
+
+function trimBodyTail(body) {
+  const out = [...body];
+  while (out.length && (isUserMarker(out.at(-1)) || isChromeLine(out.at(-1)))) {
+    out.pop();
+  }
+  return out;
 }
 
 // Lines as the terminal drew them. Blank lines and drawn rules are kept: they
@@ -378,6 +418,12 @@ function isChromeLine(line) {
   if (/^(idle|done|finished|working|blocked|thinking|ready)\b/i.test(text) && text.length < 24) {
     return true;
   }
+  // A line that is nothing but a bare key name in parentheses is the tail of
+  // the option above it, wrapped by the terminal — never a footer. See
+  // `isKeyParenthetical`.
+  if (isKeyParenthetical(text)) {
+    return false;
+  }
   // Key hints and the spinner footer. `tokens` must carry its count: the bare
   // word matched any short line that merely mentioned one, and an option whose
   // description read "任何人可从 ai-assistant 取到 ASR token" was read as a
@@ -406,6 +452,15 @@ function isChromeLine(line) {
     return true;
   }
   if (/^[✔✓☑◼◻☐■□▪▫]\s+\S/.test(text)) {
+    return true;
+  }
+  // Claude Code's permission-mode footer, drawn under the prompt box. It reads
+  // "⏵⏵ accept edits on (shift+tab to cycle) · ← for agents" on a bare pane but
+  // "⏵⏵ accept edits on · 1 monitor · ← 1 agent" once monitors or agents are
+  // attached — no key hint, no token count, nothing else here matched it. So it
+  // counted as content, and a done ping went out with the footer as its whole
+  // body. The `⏵⏵` marker is the footer, whatever it goes on to say.
+  if (/^⏵{1,2}\s/.test(text)) {
     return true;
   }
   if (/^[❯›▸$]\s*$/.test(text) || /^codex>\s*$/i.test(text)) {
@@ -445,6 +500,38 @@ function cleanOptionLine(raw) {
     .trim();
 }
 
+// Put an option back together after the terminal wrapped it. A long choice is
+// set across two lines with a hanging indent — "…for this session" and then
+// "(shift+tab)" alone underneath — and reading only the numbered line drops
+// whatever landed on the tail. Joining is also what makes the wrapped form
+// behave like the inline one: the trailing parenthetical is weighed as a
+// shortcut, or kept as prose, on the same terms either way, and the label stops
+// changing when the pane is resized and the wrap moves. Only the agent's own
+// hanging indent gets here — a hard wrap at column 0 is left of the option
+// column, so `trailingOptionRun` never admits it — which is why the pieces join
+// on a word boundary with a single space.
+function joinWrappedOptions(lines) {
+  const rows = [];
+  for (const raw of lines) {
+    // A form draws a divider between two sections of its choice list. Rules
+    // survive `cleanOptionLine` when they carry a caption, and gluing one onto
+    // the option above it would put the caption on a button.
+    if (isRuleLine(raw)) {
+      continue;
+    }
+    const line = cleanOptionLine(raw);
+    if (!line) {
+      continue;
+    }
+    if (/^\d{1,2}[.)、]\s+\S/.test(line)) {
+      rows.push(line);
+    } else if (rows.length) {
+      rows[rows.length - 1] += ` ${line}`;
+    }
+  }
+  return rows;
+}
+
 export function parseBlockedOptions(screen) {
   const lines = screenLines(screen);
   const region = dialogRegion(lines);
@@ -454,8 +541,7 @@ export function parseBlockedOptions(screen) {
     region?.optionStart === undefined ? [] : lines.slice(region.optionStart, region.end);
   const options = [];
   const seen = new Set();
-  for (const raw of candidates) {
-    const line = cleanOptionLine(raw);
+  for (const line of joinWrappedOptions(candidates)) {
     const numbered = line.match(/^(\d{1,2})[.)、]\s+(.+)$/);
     if (!numbered) {
       continue;
@@ -479,7 +565,11 @@ export function parseBlockedOptions(screen) {
     }
     seen.add(send);
     seen.add(`i:${index}`);
-    options.push({ key: index, send, label: rest.slice(0, 72) });
+    // Bounded by the widest thing that renders a label: the desktop panel, at
+    // 96 for "<key>. <label>" (`panelLabels`). Telegram caps its own button at
+    // 64. The old 72 predated rejoining wrapped options and cut a real choice
+    // mid-word — "…for this sessio" — as soon as the tail was added back.
+    options.push({ key: index, send, label: rest.slice(0, 96) });
   }
   if (options.length) {
     return options.slice(0, 9);

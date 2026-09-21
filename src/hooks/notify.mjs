@@ -354,7 +354,15 @@ if (status === "blocked") {
   process.exit(0);
 }
 
-const screen = readScreen();
+// A `done` event lands the moment the turn ends, which is also when the agent
+// is repainting the pane. The blank gate that settles `blocked` does not catch
+// that here: the prompt box, the rules and the mode footer are drawn before the
+// turn above them, so the read comes back non-blank and carries nothing worth
+// sending. What makes a done read usable is having a turn in it, so that is
+// what it waits for.
+const screen = isDone
+  ? await readScreenSettled(readScreen, { sleep, ready: (text) => Boolean(doneSnippet(text)) })
+  : readScreen();
 await pingTelegram(screen);
 if (usePanel && isDone && !shouldDebounce(paneId, "panel:done")) {
   await runPanel({ options: [], body: doneSnippet(screen) });

@@ -101,6 +101,41 @@ esc to interrupt
   assert.doesNotMatch(text, /^›$/m);
 });
 
+test("a done ping carries the answer, not the footer under the prompt box", () => {
+  // Captured from a real pane. Claude Code's mode footer reads "⏵⏵ accept edits
+  // on (shift+tab to cycle)" on a bare pane, but with monitors or agents
+  // attached it drops the key hint entirely — and nothing else here matched it,
+  // so it read as content. The prompt box compounds it: "❯ <typed text>" is
+  // indistinguishable from a turn the user sent, so the body was sliced to
+  // everything below the box, which is only chrome. The panel opened on a done
+  // ping whose entire body was that one footer line.
+  const rule = "─".repeat(60);
+  const pane = (box) =>
+    [
+      "⏺ 继续等待。",
+      "",
+      "✻ Cooked for 5s · done 10:59 AM · 1 monitor still running",
+      "",
+      rule,
+      box,
+      rule,
+      "  ➜ his-claw-agent git:(Copilot5) ctx:52% Fable 5.1",
+      "  ⏵⏵ accept edits on · 1 monitor · ← 1 agent",
+    ].join("\n");
+
+  // The box holds a non-breaking space when it is empty.
+  const idle = doneSnippet(pane("❯ "));
+  // …and reads like a sent turn once anything is typed into it.
+  const typed = doneSnippet(pane("❯ auto模式我这会有限流"));
+  for (const text of [idle, typed]) {
+    assert.match(text, /^⏺ 继续等待。/);
+    assert.doesNotMatch(text, /accept edits on/);
+    assert.doesNotMatch(text, /ctx:52%/);
+    assert.doesNotMatch(text, /auto模式/);
+  }
+  assert.equal(idle, typed);
+});
+
 test("extractReadText prefers result.read.text", () => {
   assert.equal(
     extractReadText({ result: { read: { text: "last turn" }, text: "no" } }),
@@ -544,6 +579,79 @@ $ rm -rf -- /tmp/draft
   );
 });
 
+test("an option's shortcut wrapped onto its own line is not a footer", () => {
+  // Captured from a real pane: the second choice is long enough that Claude
+  // Code puts its "(shift+tab)" on the next line. That parenthetical matched
+  // the key-hint chrome rule, so the walk up the choice list ended there — the
+  // panel offered one button ("3. No") and pushed the other two choices into
+  // the body, which began at the question instead of at the turn marker.
+  const screen = [
+    "⏺ Update(supabase-dump.sh)",
+    "  ⎿  Updated supabase-dump.sh with 3 additions",
+    "",
+    "  Do you want to make this edit to supabase-dump.sh?",
+    "  ❯ 1. Yes",
+    "    2. Yes, and always allow access to /Users/fangtao/.local/bin for this session",
+    "       (shift+tab)",
+    "    3. No",
+    "",
+    "  Esc to cancel · Tab to amend",
+    "──────────────────────────────────────────────────── ↯ ─",
+    "  ➜ trizen-doctor git:(main) ✗ ctx:42% Opus 5",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(screen), true);
+  // The tail is joined back onto the label it was wrapped off, so the button
+  // reads as the agent wrote the choice.
+  assert.deepEqual(parseBlockedOptions(screen), [
+    { key: "1", send: "1", label: "Yes" },
+    {
+      key: "2",
+      send: "2",
+      label: "Yes, and always allow access to /Users/fangtao/.local/bin for this session (shift+tab)",
+    },
+    { key: "3", send: "3", label: "No" },
+  ]);
+  const text = blockedSnippet(screen);
+  assert.match(text, /^⏺ Update\(supabase-dump\.sh\)/);
+  assert.match(text, /1\. Yes$/m);
+  assert.doesNotMatch(text, /ctx:42%/);
+
+  // The footer it was confused with still reads as chrome: a key hint says what
+  // the key does, and that is what tells the two apart.
+  assert.equal(
+    screenHasLiveDialog(
+      [...screen.split("\n"), "  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents"].join("\n"),
+    ),
+    true,
+  );
+});
+
+test("a wrapped option is read exactly like the same option unwrapped", () => {
+  // The tail under the *last* choice is the first thing the scan up from the
+  // bottom meets, so it has to be stepped over rather than treated as the end
+  // of the dialog — otherwise this screen has no options at all.
+  const wrapped = [
+    "⏺ Edit(src/app.ts)",
+    "",
+    "  Do you want to make this edit?",
+    "  ❯ 1. Yes (default)",
+    "    2. Yes, allow all edits during this session",
+    "       (shift+tab)",
+    "    3. No, and tell Claude what to do differently",
+    "       (esc)",
+    "",
+    "  Esc to cancel",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(wrapped), true);
+  // Byte for byte what the unwrapped fixture above yields: "(shift+tab)" is not
+  // a keystroke so it stays in the label, "(esc)" is one so it becomes the key.
+  assert.deepEqual(parseBlockedOptions(wrapped), [
+    { key: "1", send: "1", label: "Yes (default)" },
+    { key: "2", send: "2", label: "Yes, allow all edits during this session (shift+tab)" },
+    { key: "3", send: "esc", label: "No, and tell Claude what to do differently" },
+  ]);
+});
+
 const FINGERPRINT_DIALOG = [
   "⏺ Bash(rm -rf -- /tmp/draft)",
   "",
@@ -659,6 +767,35 @@ test("a blank pane read is retried before it is believed", async () => {
   sleeps.length = 0;
   assert.equal(await readScreenSettled(() => "up", { sleep: wait }), "up");
   assert.deepEqual(sleeps, [], "a pane that reads cleanly costs nothing");
+});
+
+test("a done read waits for a turn, not merely for ink on the pane", async () => {
+  // A done event lands as the agent repaints, and it repaints from the bottom:
+  // the prompt box and the mode footer are there before the turn above them.
+  // Such a read is not blank, so the gate that settles `blocked` hands it
+  // straight back — and the ping carries nothing. This is the gate the done
+  // path uses instead.
+  const sleeps = [];
+  const wait = async (ms) => {
+    sleeps.push(ms);
+  };
+  const rule = "─".repeat(60);
+  const repainting = [rule, "❯ ", rule, "  ⏵⏵ accept edits on · 1 monitor · ← 1 agent"].join("\n");
+  const finished = ["⏺ 继续等待。", "", repainting].join("\n");
+
+  const screens = ["", repainting, finished];
+  let reads = 0;
+  const settled = await readScreenSettled(() => screens[reads++], {
+    delayMs: 500,
+    sleep: wait,
+    ready: (text) => Boolean(doneSnippet(text)),
+  });
+  assert.equal(doneSnippet(settled), "⏺ 继续等待。");
+  assert.equal(reads, 3, "the chrome-only read is not good enough to stop on");
+  assert.deepEqual(sleeps, [500, 500]);
+
+  // The blank gate would have stopped on that same read and reported nothing.
+  assert.equal(doneSnippet(await readScreenSettled(() => repainting, { sleep: wait })), "");
 });
 
 test("consecutiveGate needs the same answer twice in a row", () => {

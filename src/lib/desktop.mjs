@@ -10,8 +10,10 @@ export const PANEL_BINARY = "oncall-panel";
 
 const TERMINAL_BUNDLE_PATTERN = /term|tty|ghostty|warp|kitty|alacritty|hyper|tabby|vscode|zed|cursor/i;
 
-// Bundle id of the frontmost macOS app, via lsappinfo (no permission prompt).
-export function frontmostBundleId() {
+// lsappinfo's view of the frontmost macOS app (no permission prompt). The name
+// matters as much as the bundle id: an unbundled binary — our own panel is one —
+// has no `CFBundleIdentifier` at all.
+export function frontmostApp() {
   if (process.platform !== "darwin") {
     return undefined;
   }
@@ -20,9 +22,16 @@ export function frontmostBundleId() {
   if (front.error || front.status !== 0 || !asn) {
     return undefined;
   }
-  const info = spawnSync("lsappinfo", ["info", "-only", "bundleid", asn], { encoding: "utf8" });
-  const match = info.stdout?.match(/"CFBundleIdentifier"\s*=\s*"([^"]+)"/);
-  return match ? match[1] : undefined;
+  const info = spawnSync("lsappinfo", ["info", "-only", "bundleid", "-only", "name", asn], {
+    encoding: "utf8",
+  });
+  const bundleId = info.stdout?.match(/"CFBundleIdentifier"\s*=\s*"([^"]+)"/)?.[1];
+  const name = info.stdout?.match(/"LSDisplayName"\s*=\s*"([^"]+)"/)?.[1];
+  return { bundleId, name };
+}
+
+export function frontmostBundleId() {
+  return frontmostApp()?.bundleId;
 }
 
 export function isTerminalBundle(bundleId, extra = process.env.DESKTOP_PANEL_TERMINALS) {
@@ -41,16 +50,24 @@ export function isTerminalBundle(bundleId, extra = process.env.DESKTOP_PANEL_TER
 }
 
 // The user is looking at this pane: it is Herdr's focused pane and a terminal
-// app is frontmost. Unknown frontmost app falls back to the focus flag alone.
-export function userAtPane(paneId, { focused = paneFocused, frontmost = frontmostBundleId } = {}) {
+// app is frontmost. An app we cannot identify falls back to the focus flag
+// alone — except our own panel, which has no bundle id because it is a bare
+// binary. Once the panel started activating itself to accept an input method,
+// that fallback read "the user has arrived at the pane" two seconds after every
+// open, and the panel closed itself while the user was still reaching for it.
+export function userAtPane(paneId, { focused = paneFocused, frontmost = frontmostApp } = {}) {
   if (focused(paneId) !== true) {
     return false;
   }
-  const bundle = frontmost();
-  if (!bundle) {
+  const front = frontmost();
+  const app = typeof front === "string" ? { bundleId: front } : front;
+  if (app?.name === PANEL_BINARY) {
+    return false;
+  }
+  if (!app?.bundleId) {
     return true;
   }
-  return isTerminalBundle(bundle);
+  return isTerminalBundle(app.bundleId);
 }
 
 // Compiled by bin/install-deps.sh into the plugin root. Herdr's build step does

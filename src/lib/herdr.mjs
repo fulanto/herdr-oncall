@@ -238,11 +238,21 @@ export function readPaneScreen(paneId, options = {}, run = runHerdr) {
 // dialog is answered, and Herdr can emit `blocked` into that gap. Keep asking
 // for a few seconds, and only then believe the emptiness. Returns the last
 // value read, so the caller still sees "" when the pane really is empty.
-export async function readScreenSettled(read, { attempts = 6, delayMs = 500, sleep: wait = sleep } = {}) {
+//
+// `ready` is what counts as settled. Blank is the default and is all `blocked`
+// needs, since its own gate re-checks the screen afterwards. A `done` read can
+// come back non-blank and still be mid-redraw — the prompt box and the mode
+// footer are drawn before the turn above them — so that caller waits for a read
+// it can actually report instead.
+export async function readScreenSettled(
+  read,
+  { attempts = 6, delayMs = 500, sleep: wait = sleep, ready } = {},
+) {
+  const settled = ready ?? ((text) => Boolean(String(text).trim()));
   let text = "";
   for (let attempt = 0; attempt < attempts; attempt++) {
     text = (await read()) ?? "";
-    if (String(text).trim()) {
+    if (settled(text)) {
       return text;
     }
     if (attempt < attempts - 1) {

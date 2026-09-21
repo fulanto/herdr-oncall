@@ -91,6 +91,36 @@ test("isTerminalBundle knows common terminals and honours extras", () => {
   assert.equal(isTerminalBundle("", "com.example.shell"), false);
 });
 
+test("our own panel in front is not the user arriving at the pane", () => {
+  // The panel is a bare binary with no CFBundleIdentifier, and it activates
+  // itself so an input method will attach. Reading that as "cannot identify the
+  // frontmost app" made the fallback fire and the panel closed itself two
+  // seconds after opening, while the user was still reaching for it.
+  assert.equal(
+    userAtPane("w1:p1", { focused: () => true, frontmost: () => ({ name: "oncall-panel" }) }),
+    false,
+  );
+  // Some other unbundled app really is unidentifiable; that fallback stands.
+  assert.equal(
+    userAtPane("w1:p1", { focused: () => true, frontmost: () => ({ name: "Some Helper" }) }),
+    true,
+  );
+  assert.equal(
+    userAtPane("w1:p1", {
+      focused: () => true,
+      frontmost: () => ({ bundleId: "com.termius-dmg.mac", name: "Termius" }),
+    }),
+    true,
+  );
+  assert.equal(
+    userAtPane("w1:p1", {
+      focused: () => true,
+      frontmost: () => ({ bundleId: "com.apple.Safari", name: "Safari" }),
+    }),
+    false,
+  );
+});
+
 test("userAtPane needs the pane focused and a terminal in front", () => {
   assert.equal(userAtPane("w1:p1", { focused: () => true, frontmost: () => "com.termius-dmg.mac" }), true);
   assert.equal(userAtPane("w1:p1", { focused: () => true, frontmost: () => "com.apple.Safari" }), false);
