@@ -87,6 +87,32 @@ export function screenHasLiveDialog(screen) {
   return true;
 }
 
+// A menu waiting on a keypress right now, as opposed to a numbered list the
+// agent ended its turn with. `screenHasLiveDialog` cannot tell those two apart:
+// a turn that closes on "1. … 2. …" is followed by nothing but the empty prompt
+// box and its footer, which is exactly what sits under a real dialog. What a
+// list in prose never has is the selection cursor — a menu draws `❯`/`›` on the
+// choice Enter would take. It also takes two choices to make a menu, which
+// keeps a draft typed into the prompt box ("❯ 1. first…") out of it.
+//
+// This is the check that overrules Herdr when it misses a question: Claude
+// Code's multi-question form has been reported `done`, and then `idle`, with
+// the form still up and waiting.
+export function screenHasOpenMenu(screen) {
+  if (!screenHasLiveDialog(screen)) {
+    return false;
+  }
+  const lines = screenLines(screen);
+  const region = dialogRegion(lines);
+  if (region?.optionStart === undefined) {
+    return false;
+  }
+  const cursor = lines
+    .slice(region.optionStart, region.end)
+    .some((line) => /^\s*[❯›▸]\s*\d{1,2}[.)、]\s+\S/.test(line));
+  return cursor && parseBlockedOptions(screen).length >= 2;
+}
+
 // The dialog as the terminal drew it: where the content being approved starts,
 // where the question is, and where the options end. Boundaries come from the
 // UI's own structure (turn markers, rules, paragraph breaks), never from a

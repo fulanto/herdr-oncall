@@ -10,6 +10,7 @@ import {
   readPaneScreen,
   runHerdr,
   screenHasLiveDialog,
+  screenHasOpenMenu,
   sendTelegram,
   stateDir,
   telegramAnswerCallback,
@@ -204,15 +205,31 @@ export function staleDialog(paneId, pingStatus, fingerprint, deps = {}) {
   return { status: 1, stale: true, stderr: "dialog changed since this ping" };
 }
 
+// How a reply is typed depends on whether something is waiting for a keypress,
+// and Herdr's status is not always the one to ask: it has called a pane `done`,
+// then `idle`, with Claude Code's multi-question form still open. `agent prompt`
+// on a pane Herdr thinks is idle submits the text — types it *and* presses
+// Enter — so a "1" picks the first choice, the form moves on to its next tab,
+// and the Enter answers that one too. A menu on screen overrules the status.
+function deliveryStatus(paneId, live, fallbackStatus, deps) {
+  if (live === "blocked") {
+    return live;
+  }
+  const read = deps.readScreen ?? ((id) => readPaneScreen(id, {}, deps.run ?? runHerdr));
+  if (screenHasOpenMenu(read(paneId))) {
+    return "blocked";
+  }
+  return live || fallbackStatus || "unknown";
+}
+
 export function deliverReply(paneId, text, fallbackStatus, options = {}) {
   const run = options.run ?? runHerdr;
   const live = currentPaneStatus(paneId, run);
-  const status = live || fallbackStatus || "unknown";
   const stale = staleDialog(paneId, fallbackStatus, options.fingerprint, options);
   if (stale) {
     return stale;
   }
-  const plan = classifyDelivery(status, text);
+  const plan = classifyDelivery(deliveryStatus(paneId, live, fallbackStatus, options), text);
   if (plan.mode === "keys") {
     return run(["pane", "send-keys", paneId, ...plan.keys]);
   }

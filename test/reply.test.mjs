@@ -203,8 +203,9 @@ test("no fingerprint and an unreadable pane both keep the old behaviour", () => 
 
 test("a done ping is never fingerprint-checked", () => {
   const calls = [];
-  // Even handed a real fingerprint: a done ping is about the pane, not about a
-  // dialog, so nothing on screen can make the new instruction stale.
+  // Even handed a real fingerprint, with that dialog gone from the screen: a
+  // done ping is about the pane, not about a dialog, so nothing on screen can
+  // make the new instruction stale.
   const result = deliverReply("w8:p1", "ship it", "done", {
     fingerprint: dialogFingerprint(DIALOG),
     run: (args) => {
@@ -212,16 +213,67 @@ test("a done ping is never fingerprint-checked", () => {
       if (args[0] === "pane" && args[1] === "get") {
         return { status: 0, stdout: JSON.stringify({ result: { agent_status: "idle" } }) };
       }
+      if (args[1] === "read") {
+        const idle = ["⏺ removed /tmp/draft.", "", "❯", "  ➜ repo git:(main) ctx:20% Opus 5"].join("\n");
+        return { status: 0, stdout: JSON.stringify({ result: { read: { text: idle } } }) };
+      }
       return { status: 0, stdout: "" };
     },
   });
+  assert.equal(result.stale, undefined);
   assert.equal(herdrFailed(result), false);
   assert.equal(calls.at(-1), "agent prompt w8:p1 ship it");
+});
+
+// Claude Code's multi-question form, on a pane Herdr reports `idle`: it never
+// saw the form, so its status says nothing is waiting.
+const FORM = [
+  "←  ☐ 切换方式  ☐ 发布保护  ✔ Submit  →",
+  "",
+  "Worker 的 Supabase 配置怎么切？",
+  "",
+  "❯ 1. 另建境内配置文件 (Recommended)",
+  "  2. 直接改默认配置",
+  "  3. Type something.",
+  "",
+  "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+].join("\n");
+
+function idleHerdr(screen, calls) {
+  return (args) => {
+    calls.push(args.join(" "));
+    if (args[0] === "pane" && args[1] === "get") {
+      return { status: 0, stdout: JSON.stringify({ result: { agent_status: "idle" } }) };
+    }
+    if (args[1] === "read") {
+      return { status: 0, stdout: JSON.stringify({ result: { read: { text: screen } } }) };
+    }
+    return { status: 0, stdout: "" };
+  };
+}
+
+test("a tap on a menu herdr calls idle is a keypress, not a prompt", () => {
+  // `agent prompt` submits: the "1" picks the first choice, the form moves to
+  // its next tab, and the Enter after it answers that question as well.
+  const calls = [];
+  const result = deliverReply("w8:p1", "1", "blocked", {
+    fingerprint: dialogFingerprint(FORM),
+    run: idleHerdr(FORM, calls),
+  });
+  assert.equal(herdrFailed(result), false);
+  assert.equal(calls.at(-1), "pane send-keys w8:p1 1");
   assert.equal(
-    calls.some((call) => call.includes("read")),
+    calls.some((call) => call.includes("agent prompt")),
     false,
-    "no dialog to verify means no pane read",
   );
+});
+
+test("a bare reply lands on the open menu the same way", () => {
+  // No fingerprint and a done ping: still a menu on screen, still one key.
+  const calls = [];
+  const result = deliverReply("w8:p1", "2", "done", { run: idleHerdr(FORM, calls) });
+  assert.equal(herdrFailed(result), false);
+  assert.equal(calls.at(-1), "pane send-keys w8:p1 2");
 });
 
 test("a tap is checked against the screen even while herdr calls the pane working", () => {
@@ -282,6 +334,15 @@ test("herdr contradicting a stale pane status re-opens the dialog check", () => 
 });
 
 test("the same fallback still delivers when the dialog matches", () => {
+  // A y/n prompt draws no menu, so nothing on screen overrules the stale
+  // `working` and the reply goes out as a prompt first.
+  const yesNo = [
+    "⏺ Bash(rm -rf -- /tmp/draft)",
+    "",
+    "  Do you want to remove the draft? (y/n)",
+    "",
+    "  Esc to cancel",
+  ].join("\n");
   const calls = [];
   const run = (args) => {
     calls.push(args.join(" "));
@@ -289,7 +350,7 @@ test("the same fallback still delivers when the dialog matches", () => {
       return { status: 0, stdout: JSON.stringify({ result: { agent_status: "working" } }) };
     }
     if (args[1] === "read") {
-      return { status: 0, stdout: JSON.stringify({ result: { read: { text: DIALOG } } }) };
+      return { status: 0, stdout: JSON.stringify({ result: { read: { text: yesNo } } }) };
     }
     if (args[0] === "agent" && args[1] === "prompt") {
       return { status: 1, stdout: "", stderr: "pane is agent_blocked" };
@@ -297,10 +358,11 @@ test("the same fallback still delivers when the dialog matches", () => {
     return { status: 0, stdout: "" };
   };
   const result = deliverReply("w8:p1", "keep going", "blocked", {
-    fingerprint: dialogFingerprint(DIALOG),
+    fingerprint: dialogFingerprint(yesNo),
     run,
   });
   assert.equal(herdrFailed(result), false);
+  assert.ok(calls.includes("agent prompt w8:p1 keep going"), calls.join("\n"));
   assert.deepEqual(calls.slice(-2), [
     "pane send-text w8:p1 keep going",
     "pane send-keys w8:p1 enter",
@@ -382,12 +444,10 @@ test("an explicit reply is bound to its dialog, a bare message is not", async ()
       inboundDeps(MOVED_ON, bareCalls, bareSent),
     );
     assert.equal(bare.ok, true);
+    // The same screen that made the explicit reply stale: had the fingerprint
+    // been checked, this would have been refused too.
+    assert.equal(bare.stale, undefined, "a bare message is about the pane, so nothing is fingerprint-checked");
     assert.equal(bareCalls.at(-1), "agent prompt w8:p1 start the next task");
-    assert.equal(
-      bareCalls.some((call) => call.includes("read")),
-      false,
-      "a bare message is about the pane, so nothing is fingerprint-checked",
-    );
     assert.match(bareSent.at(-1), /^sent · /);
   });
 });

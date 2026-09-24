@@ -24,6 +24,7 @@ import {
   parseBlockedOptions,
   readScreenSettled,
   screenHasLiveDialog,
+  screenHasOpenMenu,
   seedConfigEnv,
   shouldNotify,
 } from "../src/lib/index.mjs";
@@ -1042,6 +1043,90 @@ test("a real spinner footer still counts as chrome", () => {
   ].join("\n");
   assert.equal(screenHasLiveDialog(withFooter), true);
   assert.doesNotMatch(blockedSnippet(withFooter), /Canoodling/);
+});
+
+// Captured live from a pane Herdr reported `done`, and then `idle`, while this
+// form sat on it waiting: no blocked event ever came, so the only panel that
+// opened was a done panel, showing the form as text with nothing to press. The
+// cursor has moved to choice 2 — the user was already reaching for it.
+const FORM_HERDR_CALLED_DONE = `⏺ Before changing anything, confirming that clinmate.trizenai.com really is the domestic Supabase address. My notes have it as the domestic app site, so checking the domestic
+  build config committed in the repo:
+
+  Searched for 2 patterns, ran 1 shell command
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ 切换方式  ☐ 发布保护  ✔ Submit  →
+
+Worker 的 Supabase 配置怎么切？
+
+  1. 另建境内配置文件 (Recommended)
+     新建 deploy/cloudflare/.env.workers.selfhost.local 指向境内库，默认配置仍指向 Cloud。割接当天用 --env-file 指定它发布；数据同步和 GoTrue
+     配好之前，误发布也不会把生产切走。
+❯ 2. 直接改默认配置
+     直接修改 deploy/cloudflare/.env.workers.local（先备份），之后任何一次 Workers 发布都会立刻把生产切到境内库。
+  3. Type something.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── deploy-version-display ─`;
+
+test("a form herdr called done is an open menu", () => {
+  assert.equal(screenHasOpenMenu(FORM_HERDR_CALLED_DONE), true);
+  assert.deepEqual(
+    parseBlockedOptions(FORM_HERDR_CALLED_DONE).map((option) => option.send),
+    ["1", "2", "3", "4"],
+  );
+  assert.match(blockedSnippet(FORM_HERDR_CALLED_DONE), /Worker 的 Supabase 配置怎么切？/);
+  // The forms captured from panes that did go `blocked` pass the same check.
+  assert.equal(screenHasOpenMenu(TABBED_FORM), true);
+  assert.equal(screenHasOpenMenu(TOKEN_IN_OPTION_TEXT), true);
+});
+
+test("a turn that ends on a numbered question is not an open menu", () => {
+  // Nothing but the empty prompt box and its footer under the list, which is
+  // exactly what sits under a real dialog — so the liveness check alone calls
+  // it live, and a `done` promoted on that would put the agent's prose on
+  // buttons. No cursor on any choice is what gives it away.
+  const proseEnding = [
+    "⏺ Two ways to do the cutover:",
+    "",
+    "  1. Add a separate config file for the domestic database",
+    "  2. Edit the default config in place",
+    "",
+    "  Which one do you want?",
+    "",
+    "────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────",
+    "  ⏵⏵ accept edits on · 1 monitor · ← 1 agent",
+  ].join("\n");
+  assert.equal(screenHasOpenMenu(proseEnding), false);
+
+  const listLast = [
+    "⏺ Which one do you want?",
+    "",
+    "  1. Add a separate config file",
+    "  2. Edit the default config in place",
+    "",
+    "────────────────────────────────────────",
+    "❯",
+    "────────────────────────────────────────",
+    "  ➜ repo git:(main) ctx:33% Opus 5",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(listLast), true);
+  assert.equal(screenHasOpenMenu(listLast), false);
+});
+
+test("a numbered draft in the prompt box is not an open menu", () => {
+  const draft = [
+    "⏺ Done. All 42 tests pass.",
+    "",
+    "────────────────────────────────────────",
+    "❯ 1. now bump the version",
+    "────────────────────────────────────────",
+    "  ⏵⏵ accept edits on (shift+tab to cycle)",
+  ].join("\n");
+  assert.equal(screenHasOpenMenu(draft), false);
 });
 
 // A multi-question form advances in place: the status never leaves `blocked`,

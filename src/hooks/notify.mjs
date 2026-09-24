@@ -26,6 +26,7 @@ import {
   resolveStatus,
   resolveWorktree,
   screenHasLiveDialog,
+  screenHasOpenMenu,
   sendTelegram,
   shouldDebounce,
   shouldNotify,
@@ -57,13 +58,24 @@ if (!telegramReady && !usePanel) {
 
 const context = readJsonEnv("HERDR_PLUGIN_CONTEXT_JSON");
 const event = readJsonEnv("HERDR_PLUGIN_EVENT_JSON");
-const status = resolveStatus(event, context);
+const paneId = paneIdFrom(event, context);
+const reported = resolveStatus(event, context);
+
+// Herdr misses some questions. Claude Code's multi-question form has been
+// reported `done`, and then `idle`, with the form still up and waiting, and the
+// done panel showed it as plain text with nothing to press. A `done` with an
+// open menu on screen is a block, and the rest of this hook handles it as one.
+// It is settled before the NOTIFY_ON filter, so a setup that only asks for
+// questions still gets this one.
+const promoted =
+  (reported === "done" || reported === "finish") &&
+  screenHasOpenMenu(await readScreenSettled(() => readPaneScreen(paneId), { sleep }));
+const status = promoted ? "blocked" : reported;
 
 if (!shouldNotify(status)) {
   process.exit(0);
 }
 
-const paneId = paneIdFrom(event, context);
 const worktree = resolveWorktree(context, event, paneId);
 if (worktree) {
   context.worktree = worktree;
@@ -71,6 +83,9 @@ if (worktree) {
 const where = formatWhere(context, event);
 const title = statusTitle(context, event, status);
 const isDone = status === "done" || status === "finish";
+if (promoted) {
+  console.log(`menu on screen · ${where} · herdr said ${reported}`);
+}
 
 // A form has a handful of tabs. The cap is only a backstop against a dialog
 // that keeps changing shape without ever being satisfied.
@@ -204,6 +219,14 @@ function panelShouldClose() {
   return false;
 }
 
+// The status a form's next question is waited out against. Herdr never saw the
+// menu on a promoted pane, so its `done` and `idle` say nothing about whether
+// the form is still up there; only `working` means the pane moved on.
+function formStatus() {
+  const live = currentPaneStatus(paneId);
+  return promoted && live !== "working" ? "blocked" : live;
+}
+
 // Returns "handled" | "resolved" | "at-pane" | "superseded" | "yielded" |
 // "unavailable" | "timeout" | "dismiss" | "skipped".
 async function runPanel({ options, body, timeoutMs, fingerprint }) {
@@ -303,7 +326,7 @@ if (status === "blocked") {
       }
       const next = await nextDialog({
         read: () => readScreen(),
-        status: () => currentPaneStatus(paneId),
+        status: formStatus,
         answered: live.fingerprint,
       });
       if (!next) {
