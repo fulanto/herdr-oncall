@@ -1082,6 +1082,72 @@ test("a form herdr called done is an open menu", () => {
   assert.equal(screenHasOpenMenu(TOKEN_IN_OPTION_TEXT), true);
 });
 
+// A form's choices carry a description at the same hanging indent a wrapped
+// label uses, and joining it on is what put "Drop it (Recommended) A failed send
+// gets Home's per-message r" on a Telegram button, cut at 64.
+test("a form's buttons carry the choice, not its description", () => {
+  const labels = (screen) => parseBlockedOptions(screen).map((option) => option.label);
+  // Captured: option 1's description is long enough to wrap a line of its own,
+  // and that second line stays out too.
+  assert.deepEqual(labels(FORM_HERDR_CALLED_DONE), [
+    "另建境内配置文件 (Recommended)",
+    "直接改默认配置",
+    "Type something.",
+    "Chat about this",
+  ]);
+  assert.deepEqual(labels(TABBED_FORM), [
+    "直接透传，跳过语言路由（推荐）",
+    "按普通供应商处理",
+    "Type something.",
+    "Chat about this",
+  ]);
+  assert.deepEqual(labels(TOKEN_IN_OPTION_TEXT), [
+    "@CheckDoctorTokenParam（推荐）",
+    "不鉴权",
+    "另设签名机制",
+    "Type something.",
+    "Chat about this",
+  ]);
+  // The descriptions are still what the user reads before choosing: they stay
+  // in the body of the ping and the panel.
+  assert.match(blockedSnippet(FORM_HERDR_CALLED_DONE), /误发布也不会把生产切走/);
+});
+
+test("a label that wraps keeps its tail and still drops the description", () => {
+  // A 76-column pane: "the" did not fit after "still on", so it moved down.
+  const rule = "─".repeat(76);
+  const screen = [
+    rule,
+    "Which rollout do you want?",
+    "",
+    "❯ 1. Ship it to every hospital at once, including the two that are still on",
+    "     the old gateway",
+    "     Fastest, but the old gateway has never seen this payload.",
+    "  2. Canary first",
+    "     One hospital for a day, then the rest.",
+    "  3. Type something.",
+    rule,
+    "Enter to select · Esc to cancel",
+  ].join("\n");
+  assert.deepEqual(
+    parseBlockedOptions(screen).map((option) => option.label),
+    [
+      "Ship it to every hospital at once, including the two that are still on the old gateway",
+      "Canary first",
+      "Type something.",
+    ],
+  );
+});
+
+test("the fingerprint still covers what a description says", () => {
+  // The buttons read the same either way; what the user would be agreeing to
+  // does not, and a tap meant for one must not be accepted for the other.
+  const before = FORM_HERDR_CALLED_DONE;
+  const after = before.replace("（先备份）", "（不备份）");
+  assert.deepEqual(parseBlockedOptions(after), parseBlockedOptions(before));
+  assert.notEqual(dialogFingerprint(after), dialogFingerprint(before));
+});
+
 test("a turn that ends on a numbered question is not an open menu", () => {
   // Nothing but the empty prompt box and its footer under the list, which is
   // exactly what sits under a real dialog — so the liveness check alone calls
@@ -1205,4 +1271,21 @@ test("a blank read mid-redraw does not end the follow-on", async () => {
     wait: async () => {},
   });
   assert.equal(next.fingerprint, dialogFingerprint(two));
+});
+
+test("done and idle do not end the follow-on, only working does", async () => {
+  // A form Herdr never saw: it reports `idle` the whole time the form is up, so
+  // a read that lands mid-redraw must not be taken for the form being over.
+  const two = formTab("透传范围到哪一层？", "只到网关", "一路透传");
+  for (const said of ["idle", "done"]) {
+    const seen = ["", two];
+    let reads = 0;
+    const next = await nextDialog({
+      read: () => seen[Math.min(reads++, seen.length - 1)],
+      status: () => said,
+      answered: "an-older-fingerprint",
+      wait: async () => {},
+    });
+    assert.equal(next?.fingerprint, dialogFingerprint(two), said);
+  }
 });

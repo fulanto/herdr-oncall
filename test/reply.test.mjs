@@ -494,3 +494,189 @@ test("a button tap that names an unknown message reaches no pane", async () => {
     assert.deepEqual(sent, ["no pane mapped for that button"]);
   });
 });
+
+function formTab(bar, question, first, second) {
+  return [
+    bar,
+    "",
+    question,
+    "",
+    `❯ 1. ${first}`,
+    `  2. ${second}`,
+    "  3. Type something.",
+    "",
+    "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+  ].join("\n");
+}
+
+const TAB_ONE = formTab(
+  "←  ☐ Result card  ☐ Resend  ✔ Submit  →",
+  "Where should the result card go?",
+  "Inline in the thread",
+  "Pinned above the input",
+);
+const TAB_TWO = formTab(
+  "←  ☒ Result card  ☐ Resend  ✔ Submit  →",
+  "Scenario user bubbles have a hover re-send button. What should happen to it?",
+  "Drop it",
+  "Keep it on both surfaces",
+);
+
+// A pane whose screen moves on when a key lands, the way a form does. `after`
+// is what is drawn once the key is in, and `status` what Herdr says throughout.
+function steppingPane({ before, after, statusBefore, statusAfter, calls }) {
+  let answered = false;
+  return (args) => {
+    calls.push(args.join(" "));
+    if (args[0] === "pane" && args[1] === "get") {
+      const status = answered ? statusAfter : statusBefore;
+      return { status: 0, stdout: JSON.stringify({ result: { agent_status: status } }) };
+    }
+    if (args[1] === "read") {
+      const text = answered ? after : before;
+      return { status: 0, stdout: JSON.stringify({ result: { read: { text } } }) };
+    }
+    if (args[0] === "pane" && args[1] === "send-keys") {
+      answered = true;
+    }
+    return { status: 0, stdout: "" };
+  };
+}
+
+// Telegram as a recorder that hands out message ids, so a follow-on ping can be
+// looked up afterwards like a real one.
+function telegramRecorder(sent, { failAfter } = {}) {
+  let nextId = 100;
+  return async (_token, _chat, text, options = {}) => {
+    if (failAfter !== undefined && sent.length >= failAfter) {
+      throw new Error("fetch failed");
+    }
+    sent.push({ id: nextId, text, buttons: options.replyMarkup?.inline_keyboard?.map((row) => row[0].text) });
+    return nextId++;
+  };
+}
+
+function tapOn(messageId, data = "1") {
+  return {
+    callback_query: {
+      id: "cb",
+      data,
+      from: { id: 55 },
+      message: { message_id: messageId, chat: { id: 55 } },
+    },
+  };
+}
+
+test("answering a form's question from telegram pings the next one", async () => {
+  await withStateDir(async () => {
+    rememberOutbound({
+      messageId: 7,
+      paneId: "w8:p1",
+      status: "blocked",
+      where: "trizen-doctor · release_20260930 · pane 1",
+      title: "blocked · Claude",
+      fingerprint: dialogFingerprint(TAB_ONE),
+      options: [],
+    });
+    const calls = [];
+    const sent = [];
+    const result = await handleTelegramUpdate(tapOn(7), {
+      token: "t",
+      chatId: "55",
+      send: telegramRecorder(sent),
+      answer: async () => {},
+      wait: async () => {},
+      // The form Herdr called done: `idle` before the answer and after it.
+      run: steppingPane({
+        before: TAB_ONE,
+        after: TAB_TWO,
+        statusBefore: "idle",
+        statusAfter: "idle",
+        calls,
+      }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.followed, true);
+    assert.ok(calls.includes("pane send-keys w8:p1 1"), calls.join("\n"));
+    assert.equal(sent.length, 2, "the ack, then the next question");
+    assert.match(sent[0].text, /^sent · /);
+    const ping = sent[1];
+    assert.match(ping.text, /^blocked · Claude\ntrizen-doctor · release_20260930 · pane 1\n/);
+    assert.match(ping.text, /What should happen to it\?/);
+    assert.deepEqual(ping.buttons, ["1. Drop it", "2. Keep it on both surfaces", "3. Type something."]);
+    // The next ping is a ping like any other: its buttons are bound to its own
+    // question, and it can be followed again from there.
+    const record = lookupOutbound(ping.id);
+    assert.equal(record.paneId, "w8:p1");
+    assert.equal(record.status, "blocked");
+    assert.equal(record.title, "blocked · Claude");
+    assert.equal(record.fingerprint, dialogFingerprint(TAB_TWO));
+  });
+});
+
+test("a one-off dialog answered from telegram pings nothing more", async () => {
+  await withStateDir(async () => {
+    rememberOutbound({
+      messageId: 7,
+      paneId: "w8:p1",
+      status: "blocked",
+      where: "asr-service · main",
+      fingerprint: dialogFingerprint(DIALOG),
+    });
+    const calls = [];
+    const sent = [];
+    const result = await handleTelegramUpdate(tapOn(7), {
+      token: "t",
+      chatId: "55",
+      send: telegramRecorder(sent),
+      answer: async () => {},
+      wait: async () => {},
+      run: steppingPane({
+        before: DIALOG,
+        after: "⏺ Bash(rm -rf -- /tmp/draft)\n  ⎿  Running…\n\n✢ Working… (3s · esc to interrupt)",
+        statusBefore: "blocked",
+        statusAfter: "working",
+        calls,
+      }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.followed, undefined);
+    assert.deepEqual(
+      sent.map((message) => message.text),
+      ["sent · asr-service · main"],
+    );
+  });
+});
+
+test("a lost follow-on ping does not undo the answer that went through", async () => {
+  await withStateDir(async () => {
+    rememberOutbound({
+      messageId: 7,
+      paneId: "w8:p1",
+      status: "blocked",
+      where: "trizen-doctor · pane 1",
+      fingerprint: dialogFingerprint(TAB_ONE),
+    });
+    const calls = [];
+    const sent = [];
+    const result = await handleTelegramUpdate(tapOn(7), {
+      token: "t",
+      chatId: "55",
+      // The ack goes out; the network drops the next question's ping.
+      send: telegramRecorder(sent, { failAfter: 1 }),
+      answer: async () => {},
+      wait: async () => {},
+      run: steppingPane({
+        before: TAB_ONE,
+        after: TAB_TWO,
+        statusBefore: "idle",
+        statusAfter: "idle",
+        calls,
+      }),
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.followed, undefined);
+    assert.ok(calls.includes("pane send-keys w8:p1 1"));
+    assert.equal(sent.length, 1);
+  });
+});

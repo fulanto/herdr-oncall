@@ -219,14 +219,6 @@ function panelShouldClose() {
   return false;
 }
 
-// The status a form's next question is waited out against. Herdr never saw the
-// menu on a promoted pane, so its `done` and `idle` say nothing about whether
-// the form is still up there; only `working` means the pane moved on.
-function formStatus() {
-  const live = currentPaneStatus(paneId);
-  return promoted && live !== "working" ? "blocked" : live;
-}
-
 // Returns "handled" | "resolved" | "at-pane" | "superseded" | "yielded" |
 // "unavailable" | "timeout" | "dismiss" | "skipped".
 async function runPanel({ options, body, timeoutMs, fingerprint }) {
@@ -280,7 +272,7 @@ async function pingTelegram(screen) {
     forceReply: status !== "blocked" || options.length === 0,
     replyMarkup: optionKeyboard(options),
   });
-  rememberOutbound({ messageId, paneId, status, where, fingerprint, options });
+  rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options });
 }
 
 if (status === "blocked") {
@@ -326,7 +318,7 @@ if (status === "blocked") {
       }
       const next = await nextDialog({
         read: () => readScreen(),
-        status: formStatus,
+        status: () => currentPaneStatus(paneId),
         answered: live.fingerprint,
       });
       if (!next) {

@@ -5,13 +5,17 @@ import { sleep } from "./paths.mjs";
 import { worktreeFrom, worktreeLabel, worktreeShortName } from "./worktree.mjs";
 
 // Answering one question of a multi-question form does not end the pane's wait:
-// the form advances to its next tab in place, the status never leaves `blocked`,
-// and so Herdr fires no event at all. A hook that exits after delivering its
-// answer takes the panel with it and leaves the rest of the form to the
-// terminal. Poll for the question that replaces the one just answered.
+// the form advances to its next tab in place, and Herdr fires no event for it.
+// Whoever delivered the answer — the hook behind the desktop panel, or the
+// poller behind a Telegram reply — has to find the question that replaces it,
+// or the rest of the form sits in the terminal with nobody told.
 //
 // The screen decides, not the status: Herdr's detection lags a redraw, and a
 // pane it briefly calls `working` can already have the next question drawn.
+// The status only ends the wait early, and only `working` may: it means the
+// answer was taken and the agent went on. `done` and `idle` say nothing about a
+// form — Herdr has called one done, and then idle, the whole time it sat there
+// waiting — so a read that lands mid-redraw must not be taken for the end of it.
 export async function nextDialog({
   read,
   status,
@@ -31,8 +35,7 @@ export async function nextDialog({
       // The same question is still on screen; the redraw has not landed yet.
       continue;
     }
-    const live = status?.();
-    if (live && live !== "blocked") {
+    if (status?.() === "working") {
       return undefined;
     }
   }
@@ -536,8 +539,18 @@ function cleanOptionLine(raw) {
 // hanging indent gets here — a hard wrap at column 0 is left of the option
 // column, so `trailingOptionRun` never admits it — which is why the pieces join
 // on a word boundary with a single space.
-function joinWrappedOptions(lines) {
+//
+// A form's choices carry a description on the lines under them, at that same
+// hanging indent, and joining those too is what put "Drop it (Recommended) A
+// failed send gets Home's per-message r…" on a button. Indentation cannot tell
+// the two apart; the width can. A wrap leaves the line above it full, and a
+// description starts under a label with room to spare. So each row has a
+// `label` — the numbered line and what wrapped off it — and a `text`, which is
+// everything the option says, description included.
+function joinWrappedOptions(lines, width) {
   const rows = [];
+  let previous;
+  let wrapping = false;
   for (const raw of lines) {
     // A form draws a divider between two sections of its choice list. Rules
     // survive `cleanOptionLine` when they carry a caption, and gluing one onto
@@ -550,15 +563,95 @@ function joinWrappedOptions(lines) {
       continue;
     }
     if (/^\d{1,2}[.)、]\s+\S/.test(line)) {
-      rows.push(line);
-    } else if (rows.length) {
-      rows[rows.length - 1] += ` ${line}`;
+      rows.push({ label: line, text: line });
+      previous = raw;
+      wrapping = true;
+      continue;
+    }
+    if (!rows.length) {
+      continue;
+    }
+    const row = rows[rows.length - 1];
+    row.text += ` ${line}`;
+    // Once a description has begun, the rest of the lines under this option are
+    // the description and its own wraps.
+    if (wrapping && wrappedOnto(previous, raw, width)) {
+      row.label += ` ${line}`;
+      previous = raw;
+    } else {
+      wrapping = false;
     }
   }
   return rows;
 }
 
+// Widths are counted, not measured: an ambiguous glyph or an emoji can be off
+// by a column, so a line this close to the edge still counts as full.
+const WRAP_SLACK = 2;
+
+// Did the terminal carry `next` over from `previous`? A word moves down only
+// when it does not fit, so after a wrap the line above, a space, and the word
+// that was carried over together overrun the pane.
+function wrappedOnto(previous, next, width) {
+  const word = String(next).trim().split(/\s+/)[0] ?? "";
+  return displayWidth(previous) + 1 + displayWidth(word) > width - WRAP_SLACK;
+}
+
+// How wide the pane is, read off the screen itself: the rules the agents draw
+// run the full width, and no line can be wider than the pane.
+function screenWidth(lines) {
+  let width = 0;
+  for (const line of lines) {
+    width = Math.max(width, displayWidth(line));
+  }
+  return width;
+}
+
+// Columns a line takes on the terminal. CJK and fullwidth text take two per
+// character, and a pane of Chinese reads half as wide as its string length.
+function displayWidth(text) {
+  let width = 0;
+  for (const ch of String(text)) {
+    width += isWideCodePoint(ch.codePointAt(0)) ? 2 : 1;
+  }
+  return width;
+}
+
+function isWideCodePoint(code) {
+  return (
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0x303e) ||
+    (code >= 0x3041 && code <= 0x33ff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xa000 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  );
+}
+
+// A trailing parenthetical comes off the text only when it names a keystroke.
+// "(default)" and "(shift+tab)" are prose the user should still read, and typing
+// them into the pane is what a stripped non-shortcut used to do.
+function splitShortcut(raw) {
+  const text = String(raw).replace(/\s+/g, " ").trim();
+  const trailing = text.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+  const shortcut = trailing ? normalizeShortcut(trailing[2]) : undefined;
+  return shortcut ? { text: trailing[1].trim(), shortcut } : { text };
+}
+
 export function parseBlockedOptions(screen) {
+  return readOptions(screen).map(({ key, send, label }) => ({ key, send, label }));
+}
+
+// The choices, each with its button `label` and its `whole` text — the label
+// plus any description, which is what the fingerprint hashes.
+function readOptions(screen) {
   const lines = screenLines(screen);
   const region = dialogRegion(lines);
   // Only the choices under this question. Numbered lines elsewhere on screen
@@ -567,25 +660,14 @@ export function parseBlockedOptions(screen) {
     region?.optionStart === undefined ? [] : lines.slice(region.optionStart, region.end);
   const options = [];
   const seen = new Set();
-  for (const line of joinWrappedOptions(candidates)) {
-    const numbered = line.match(/^(\d{1,2})[.)、]\s+(.+)$/);
+  for (const row of joinWrappedOptions(candidates, screenWidth(lines))) {
+    const numbered = row.label.match(/^(\d{1,2})[.)、]\s+(.+)$/);
     if (!numbered) {
       continue;
     }
     const index = numbered[1];
-    let rest = numbered[2].replace(/\s+/g, " ").trim();
-    let shortcut;
-    const trailing = rest.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
-    if (trailing) {
-      shortcut = normalizeShortcut(trailing[2]);
-      // Only a real keystroke is stripped from the label. "(default)" and
-      // "(shift+tab)" are prose the user should still read, and typing them
-      // into the pane is what a stripped non-shortcut used to do.
-      if (shortcut) {
-        rest = trailing[1].trim();
-      }
-    }
-    const send = shortcut || index;
+    const own = splitShortcut(numbered[2]);
+    const send = own.shortcut || index;
     if (seen.has(send) || seen.has(`i:${index}`)) {
       continue;
     }
@@ -595,15 +677,20 @@ export function parseBlockedOptions(screen) {
     // 96 for "<key>. <label>" (`panelLabels`). Telegram caps its own button at
     // 64. The old 72 predated rejoining wrapped options and cut a real choice
     // mid-word — "…for this sessio" — as soon as the tail was added back.
-    options.push({ key: index, send, label: rest.slice(0, 96) });
+    options.push({
+      key: index,
+      send,
+      label: own.text.slice(0, 96),
+      whole: splitShortcut(row.text.replace(/^\d{1,2}[.)、]\s+/, "")).text,
+    });
   }
   if (options.length) {
     return options.slice(0, 9);
   }
   if (/\b\[?y\/n\]?\b/i.test(screen) || /\(y\/n\)/i.test(screen)) {
     return [
-      { key: "y", send: "y", label: "yes" },
-      { key: "n", send: "n", label: "no" },
+      { key: "y", send: "y", label: "yes", whole: "yes" },
+      { key: "n", send: "n", label: "no", whole: "no" },
     ];
   }
   return [];
@@ -657,8 +744,13 @@ export function dialogFingerprint(screen) {
     return undefined;
   }
   const parts = [collapse(region.header >= 0 ? lines[region.header] : "")];
-  for (const option of parseBlockedOptions(screen)) {
-    parts.push(`${option.key}|${collapse(option.label)}`);
+  // Everything each option says, description included — not the button label.
+  // Where a label ends and its description begins is judged against the pane
+  // width read off the screen, and a hash must not move with that reading; the
+  // description is also part of what the user is agreeing to. For a choice with
+  // no description the two are the same text, so those hash as they always did.
+  for (const option of readOptions(screen)) {
+    parts.push(`${option.key}|${collapse(option.whole)}`);
   }
   // The body too, but only down to the first option: two Bash approvals in a
   // row ask the identical question with the identical choices, and only the
@@ -691,8 +783,13 @@ export function optionKeyboard(options) {
 }
 
 export function formatMessage(context, event, status, snippet) {
-  const head = statusTitle(context, event, status);
-  const where = formatWhere(context, event);
+  return composeMessage(statusTitle(context, event, status), formatWhere(context, event), status, snippet);
+}
+
+// The message once its title and location are known. The poller follows a form
+// without the event the hook was handed, so it builds each next ping from what
+// the first one recorded.
+export function composeMessage(head, where, status, snippet) {
   if (status === "blocked") {
     const body = snippet || "waiting for input";
     return [head, where, "", body, "", "tap a button, or type another answer"].join("\n");

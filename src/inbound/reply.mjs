@@ -1,11 +1,16 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  blockedSnippet,
+  composeMessage,
   consumePairCode,
   currentPaneStatus,
+  dialogChoices,
   dialogFingerprint,
   envFlag,
   extractStartPayload,
+  nextDialog,
+  optionKeyboard,
   pendingPair,
   readPaneScreen,
   runHerdr,
@@ -13,9 +18,11 @@ import {
   screenHasOpenMenu,
   sendTelegram,
   stateDir,
+  statusTitle,
   telegramAnswerCallback,
   upsertEnvValue,
 } from "../lib/index.mjs";
+import { describeError } from "./poller.mjs";
 
 const OUTBOUND_TTL_MS = 24 * 60 * 60 * 1000;
 const NAMED_KEYS = {
@@ -96,6 +103,9 @@ export function rememberOutbound(record, now = Date.now()) {
     paneId: record.paneId,
     status: record.status,
     where: record.where,
+    // The ping's own heading ("blocked · Claude"), so the next question of a
+    // form can go out under the same one without the hook's event.
+    title: record.title,
     // What the pane was asking when this ping went out, so a late tap can be
     // checked against the dialog it was meant for.
     fingerprint: record.fingerprint,
@@ -351,6 +361,9 @@ async function handleCallback(query, deps) {
 async function finishDelivery(target, text, deps) {
   const { token, chatId } = deps;
   const send = deps.send ?? sendTelegram;
+  // Which question this reply is about to answer, read before it lands, so the
+  // one that replaces it can be told apart from it afterwards.
+  const answered = target.status === "blocked" ? liveDialog(target.paneId, deps) : undefined;
   const result = deliverReply(target.paneId, text, target.status, {
     fingerprint: replyFingerprint(target),
     run: deps.run,
@@ -365,7 +378,64 @@ async function finishDelivery(target, text, deps) {
     ? `sent · ${target.where || target.paneId}`
     : `failed · ${target.where || target.paneId}\n${herdrErrorText(result)}`;
   await send(token, chatId, ack, { forceReply: false });
-  return { ok, paneId: target.paneId, mode: classifyDelivery(target.status, text).mode };
+  const outcome = { ok, paneId: target.paneId, mode: classifyDelivery(target.status, text).mode };
+  if (ok && answered && (await followForm(target, answered, deps))) {
+    outcome.followed = true;
+  }
+  return outcome;
+}
+
+function liveDialog(paneId, deps) {
+  const screen = readPaneScreen(paneId, {}, deps.run ?? runHerdr);
+  return screenHasLiveDialog(screen) ? dialogFingerprint(screen) : undefined;
+}
+
+// A multi-question form advances in place, tab by tab, and Herdr fires no event
+// for the next question. The desktop panel follows a form itself, from inside
+// the hook; a Telegram ping goes out as that hook exits, so answering the first
+// question from here left every later one sitting in the terminal with nobody
+// told. After a reply lands in a dialog, wait for the question that replaces it
+// and ping that one too, under the same heading, with its own buttons and
+// fingerprint. Returns whether a next question was pinged.
+async function followForm(target, answered, deps) {
+  const { token, chatId } = deps;
+  const send = deps.send ?? sendTelegram;
+  const run = deps.run ?? runHerdr;
+  const where = target.where || target.paneId;
+  const next = await nextDialog({
+    read: () => readPaneScreen(target.paneId, {}, run),
+    status: () => currentPaneStatus(target.paneId, run),
+    answered,
+    wait: deps.wait,
+  });
+  if (!next) {
+    return false;
+  }
+  const title = target.title || statusTitle({}, {}, "blocked");
+  const options = dialogChoices(next.screen);
+  const message = composeMessage(title, where, "blocked", blockedSnippet(next.screen));
+  try {
+    const messageId = await send(token, chatId, message, {
+      forceReply: options.length === 0,
+      replyMarkup: optionKeyboard(options),
+    });
+    rememberOutbound({
+      messageId,
+      paneId: target.paneId,
+      status: "blocked",
+      where: target.where,
+      title,
+      fingerprint: next.fingerprint,
+      options,
+    });
+  } catch (error) {
+    // The answer itself went through and was acked; only the next question's
+    // ping was lost, and that is worth a line of its own.
+    console.error(`follow-on ping failed · ${where}: ${describeError(error)}`);
+    return false;
+  }
+  console.log(`follows on · ${where}`);
+  return true;
 }
 
 export function pollEnabled() {
