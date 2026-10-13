@@ -653,6 +653,63 @@ test("a wrapped option is read exactly like the same option unwrapped", () => {
   ]);
 });
 
+// Reconstructed from a screenshot of a real pane, at the width it was measured
+// at (147). The same choice as the capture above, wrapped differently: the path
+// is long enough to push the shortcut down with the word before it, so the
+// tail reads "session (shift+tab)" — and since only a line that was *nothing
+// but* the parenthetical was spared, `shift+tab` made this one a footer again.
+// The walk up stopped there and the panel had one button, "3. No".
+const SHIFT_TAB_WITH_A_WORD = [
+  "  44      private ProxySignatureVerifier signatureVerifier;",
+  "╌".repeat(147),
+  " Do you want to make this edit to TokenAuthFilterAsrAuthTest.java?",
+  " ❯ 1. Yes",
+  "   2. Yes, and always allow access to",
+  "      /Users/fangtao/Git-Repo/trizen/his-claw-gateway/.worktrees/asr-ws-access-token/src/test/java/com/trizen/gateway/infra/security for this",
+  "      session (shift+tab)",
+  "   3. No",
+  "",
+  " Esc to cancel · Tab to amend · ctrl+x ctrl+k twice to stop background agents",
+].join("\n");
+
+test("a shortcut wrapped down with a word before it is still the option's tail", () => {
+  assert.equal(screenHasLiveDialog(SHIFT_TAB_WITH_A_WORD), true);
+  const options = parseBlockedOptions(SHIFT_TAB_WITH_A_WORD);
+  assert.deepEqual(
+    options.map((option) => `${option.key}:${option.send}`),
+    ["1:1", "2:2", "3:3"],
+  );
+  // The path is the label, all of it on the line it wrapped onto; the panel and
+  // Telegram cut it to their own widths.
+  assert.match(options[1].label, /^Yes, and always allow access to \/Users\/fangtao\/Git-Repo\//);
+  assert.match(blockedSnippet(SHIFT_TAB_WITH_A_WORD), /^Do you want to make this edit to TokenAuthFilterAsrAuthTest\.java\?/);
+  assert.equal(screenHasOpenMenu(SHIFT_TAB_WITH_A_WORD), true);
+});
+
+test("the last option's tail may carry a word before its shortcut", () => {
+  const screen = [
+    "  Do you want to proceed?",
+    "  ❯ 1. Yes",
+    "    2. No, and tell Claude what to do",
+    "       differently (esc)",
+    "",
+    "  Esc to cancel",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(screen), true);
+  assert.deepEqual(parseBlockedOptions(screen), [
+    { key: "1", send: "1", label: "Yes" },
+    { key: "2", send: "esc", label: "No, and tell Claude what to do differently" },
+  ]);
+});
+
+test("a line under the choices that merely ends in a key is not their tail", () => {
+  // A tail hangs under its label. Prose at the option column that happens to end
+  // in "(y)" is content below the list, so the list is not a live dialog.
+  const screen = ["1. Build the image", "2. Run the tests", "Say which one to run (y)"].join("\n");
+  assert.equal(screenHasLiveDialog(screen), false);
+  assert.deepEqual(parseBlockedOptions(screen), []);
+});
+
 const FINGERPRINT_DIALOG = [
   "⏺ Bash(rm -rf -- /tmp/draft)",
   "",

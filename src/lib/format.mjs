@@ -143,19 +143,10 @@ export function dialogRegion(lines) {
 function trailingOptionRun(lines) {
   let bottom = -1;
   let end = -1;
+  let tailIndent = Infinity;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
     if (isBlank(line) || isRuleLine(line) || isChromeLine(line)) {
-      continue;
-    }
-    // The last choice's own wrapped tail sits below it, so it is the first
-    // thing this scan meets. It is part of the run, not the end of it: stepping
-    // over it keeps the run findable, and stretching `end` past it keeps the
-    // tail in the region, where `joinWrappedOptions` puts it back on the label.
-    if (isKeyParenthetical(line)) {
-      if (end < 0) {
-        end = i + 1;
-      }
       continue;
     }
     if (isOptionLine(line)) {
@@ -163,6 +154,20 @@ function trailingOptionRun(lines) {
       if (end < 0) {
         end = i + 1;
       }
+      break;
+    }
+    // The last choice's own wrapped tail sits below it, so it is the first
+    // thing this scan meets. It is part of the run, not the end of it: stepping
+    // over it keeps the run findable, and stretching `end` past it keeps the
+    // tail in the region, where `joinWrappedOptions` puts it back on the label.
+    // The option itself is checked first, because "3. No (esc)" ends the same
+    // way its wrapped tail would.
+    if (endsInKeyParenthetical(line)) {
+      if (end < 0) {
+        end = i + 1;
+      }
+      tailIndent = Math.min(tailIndent, indentOf(line));
+      continue;
     }
     break;
   }
@@ -172,6 +177,12 @@ function trailingOptionRun(lines) {
   // A wrapped option continues on a more indented line; anything at or left of
   // the option column ends the run.
   const column = indentOf(lines[bottom]);
+  // A tail hangs under its label. One at or left of the option column is not a
+  // tail but content below the choices, and a dialog with content under it is
+  // not the last thing on screen.
+  if (tailIndent <= column) {
+    return undefined;
+  }
   let top = bottom;
   let lowest = optionNumber(lines[bottom]);
   for (let i = bottom - 1; i >= 0; i--) {
@@ -320,17 +331,18 @@ function isOptionLine(line) {
   return /^\s*[❯›▸>]?\s*\d{1,2}[.)、]\s+\S/.test(cleanOptionLine(line));
 }
 
-// A line that is nothing but a key name in parentheses — "(shift+tab)", "(esc)"
-// — is the tail of the option above it, wrapped by the terminal past the pane
-// width, and never a footer. Claude Code draws "2. Yes, and always allow access
-// to /Users/… for this session (shift+tab)" and breaks it exactly there; while
-// `shift+tab` counted as a key hint, the walk up the choice list stopped dead
-// at the tail and the panel opened with one button ("3. No") while the other
-// two choices sat stranded in the body. A real key hint says what the key
-// *does* ("shift+tab to cycle", "esc to interrupt"), and the space that takes
-// is what tells the two apart.
-function isKeyParenthetical(line) {
-  return /^\(\s*[A-Za-z0-9]+(?:\+[A-Za-z0-9]+)*\s*\)$/.test(String(line).trim());
+// A line that ends in a bare key name in parentheses — "(shift+tab)", "(esc)" —
+// is the tail of an option, wrapped by the terminal past the pane width, and
+// never a footer. Claude Code draws "2. Yes, and always allow access to
+// /Users/… for this session (shift+tab)" and breaks it wherever the width
+// says: once leaving "(shift+tab)" alone on the last line, once with the word
+// before it, "session (shift+tab)". While `shift+tab` counted as a key hint,
+// the walk up the choice list stopped dead at that tail, both times, and the
+// panel opened with one button ("3. No") while the other two choices sat
+// stranded in the body. A real key hint says what the key *does* ("shift+tab
+// to cycle", "esc to interrupt"), so its parentheses never hold a bare key.
+function endsInKeyParenthetical(line) {
+  return /\(\s*[A-Za-z0-9]+(?:\+[A-Za-z0-9]+)*\s*\)$/.test(String(line).trim());
 }
 
 // Stop before the spinner, prompt box, or status line that the visible screen
@@ -447,10 +459,10 @@ function isChromeLine(line) {
   if (/^(idle|done|finished|working|blocked|thinking|ready)\b/i.test(text) && text.length < 24) {
     return true;
   }
-  // A line that is nothing but a bare key name in parentheses is the tail of
-  // the option above it, wrapped by the terminal — never a footer. See
-  // `isKeyParenthetical`.
-  if (isKeyParenthetical(text)) {
+  // A line that ends in a bare key name in parentheses is the tail of an
+  // option, wrapped by the terminal — never a footer. See
+  // `endsInKeyParenthetical`.
+  if (endsInKeyParenthetical(text)) {
     return false;
   }
   // Key hints and the spinner footer. `tokens` must carry its count: the bare
