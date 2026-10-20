@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { setupHints } from "../src/lib/index.mjs";
+import { integrationLines, setupHints } from "../src/lib/index.mjs";
 
 const envPath = "/cfg/.env";
 // A current Node unless a test says otherwise, so the hints do not depend on
@@ -78,4 +78,22 @@ test("a paired channel that CHANNEL leaves out says so", () => {
   const lines = setupHints({ ...fresh, panel: "ready", token: "t", chatId: "1", feishu: true, channels: ["feishu"] });
   assert.ok(lines.includes("feishu: paired"));
   assert.ok(lines.includes("telegram: paired, but CHANNEL does not include it"));
+});
+
+test("an agent still without Herdr's integration is pointed at installing it", () => {
+  const lines = setupHints({ ...fresh, panel: "ready", feishu: true, channels: ["feishu"], integrations: ["codex"] });
+  const head = index(lines, /^done pings: these agents need Herdr's integration/);
+  assert.ok(head >= 0, lines.join("\n"));
+  assert.equal(lines[head + 1], "  herdr integration install codex");
+  assert.ok(!setupHints({ ...fresh, panel: "ready" }).some((line) => line.includes("herdr integration")));
+});
+
+test("what the automatic install did is said once, failures included", () => {
+  assert.deepEqual(integrationLines({ installed: [], failed: [] }), []);
+  const [installed, failed] = integrationLines({
+    installed: ["codex"],
+    failed: [{ agent: "codex", detail: "no config dir" }],
+  });
+  assert.match(installed, /^codex: installed Herdr's codex integration.*restart codex sessions already running/);
+  assert.equal(failed, "codex: herdr integration install codex failed: no config dir");
 });

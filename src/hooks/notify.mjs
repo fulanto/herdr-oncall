@@ -11,12 +11,15 @@ import {
   dialogChoices,
   dialogFingerprint,
   doneSnippet,
+  ensureIntegrations,
   formatMessage,
   formatWhere,
+  integrationLines,
   loadDotEnv,
   markBlockedDelay,
   modeEnabled,
   nextDialog,
+  paneAgentName,
   paneIdFrom,
   panelAvailable,
   readJsonEnv,
@@ -28,6 +31,7 @@ import {
   screenHasLiveDialog,
   screenHasOpenMenu,
   sendRemote,
+  sessionAnswer,
   shouldDebounce,
   shouldNotify,
   showPanel,
@@ -256,11 +260,11 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
   return result.kind;
 }
 
-async function pingRemote(screen) {
+async function pingRemote(screen, doneBody) {
   if (!channels.length || shouldDebounce(paneId, status)) {
     return;
   }
-  const snippet = status === "blocked" ? blockedSnippet(screen) : isDone ? doneSnippet(screen) : "";
+  const snippet = status === "blocked" ? blockedSnippet(screen) : isDone ? (doneBody ?? doneSnippet(screen)) : "";
   // A hook-authoritative block has no menu on screen: nothing to put on buttons
   // and nothing to fingerprint, so the reply comes back as free text.
   const dialogBacked = status === "blocked" && !hookAuthoritative;
@@ -372,16 +376,43 @@ if (status === "blocked") {
   process.exit(0);
 }
 
-// A `done` event lands the moment the turn ends, which is also when the agent
-// is repainting the pane. The blank gate that settles `blocked` does not catch
-// that here: the prompt box, the rules and the mode footer are drawn before the
-// turn above them, so the read comes back non-blank and carries nothing worth
-// sending. What makes a done read usable is having a turn in it, so that is
-// what it waits for.
-const screen = isDone
-  ? await readScreenSettled(readScreen, { sleep, ready: (text) => Boolean(doneSnippet(text)) })
-  : readScreen();
-await pingRemote(screen);
+// A done ping carries the agent's last answer, taken from the agent's own
+// session record when Herdr knows which session the pane runs (its Claude Code
+// and Codex integrations report it). That record has the answer verbatim; the
+// screen has it wrapped in whatever the agent draws around it, and reading it
+// off there put a new agent footer into the ping every time one appeared.
+//
+// The screen stays the fallback. A `done` event lands the moment the turn
+// ends, which is also when the agent is repainting the pane. The blank gate
+// that settles `blocked` does not catch that here: the prompt box, the rules
+// and the mode footer are drawn before the turn above them, so the read comes
+// back non-blank and carries nothing worth sending. What makes a done read
+// usable is having a turn in it, so that is what it waits for.
+let screen = "";
+let doneBody;
+if (isDone) {
+  doneBody = await sessionAnswer(paneId);
+  let source = "session";
+  if (!doneBody) {
+    source = "screen";
+    // A Codex pane with no session to find: usually Codex was installed after
+    // Oncall, whose own startup and install already cover the rest. Herdr's
+    // server can run for days without a restart, so the integration goes in
+    // now. This session started without it and is read off the screen; the
+    // next one reports its session.
+    if (paneAgentName(paneId) === "codex") {
+      for (const line of integrationLines(ensureIntegrations())) {
+        console.log(line);
+      }
+    }
+    screen = await readScreenSettled(readScreen, { sleep, ready: (text) => Boolean(doneSnippet(text)) });
+    doneBody = doneSnippet(screen);
+  }
+  console.log(`done · ${where} · answer from ${source}`);
+} else {
+  screen = readScreen();
+}
+await pingRemote(screen, doneBody);
 if (usePanel && isDone && !shouldDebounce(paneId, "panel:done")) {
-  await runPanel({ options: [], body: doneSnippet(screen) });
+  await runPanel({ options: [], body: doneBody });
 }

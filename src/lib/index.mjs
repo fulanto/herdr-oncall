@@ -8,6 +8,7 @@ export * from "./feishu.mjs";
 export * from "./feishu-ws.mjs";
 export * from "./channels.mjs";
 export * from "./pair.mjs";
+export * from "./transcript.mjs";
 export * from "./worktree.mjs";
 export * from "./desktop.mjs";
 export * from "./setup.mjs";

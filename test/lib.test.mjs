@@ -137,6 +137,71 @@ test("a done ping carries the answer, not the footer under the prompt box", () =
   assert.equal(idle, typed);
 });
 
+// Reconstructed from a screenshot of a colleague's Codex pane, whose done ping
+// carried only the footer: "› Ask Codex to do anything" is the prompt box, but
+// it reads exactly like a turn the user sent, and the model line and shortcut
+// hints under it were not known footers, so the slice below the box was not
+// empty and nothing fell back. The session record is the primary source now;
+// this is the screen fallback for a pane whose session cannot be found. The
+// layout is the capture's; the words are not, since that was someone's work.
+const CODEX_DONE = [
+  "› 总结一下版本改动点",
+  "",
+  "• 我会按 app-store-release-notes 技能，对比当前分支最近标签到当前代码的差异，整理简短的版本更新要点。",
+  "",
+  "• Explored",
+  "  └ Read SKILL.md (app-store-release-notes skill)",
+  "    + Show details",
+  "",
+  "• Ran git status --short --branch && git describe --tags --abbrev=0 && git log -8 --oneline",
+  "  └ 1.0.2",
+  "    1.0.0",
+  "    1.0.1",
+  "    + 76 lines (^t to expand)",
+  "",
+  "• 相较 1.4.0 标签，主要更新：",
+  "",
+  "  • 支持多个账号切换",
+  "  • 下载记录可离线查看",
+  "  • 断网后自动重试上传",
+  "  • 设置页保留上次的选择",
+  "",
+  "  Worked for 51s • 19:35",
+  "",
+  "› Ask Codex to do anything",
+  "",
+  "  GPT-6-Astra high · ~/Documents/work/app · 上传代码",
+  "  ← for agents · ? for shortcuts                                        ⚠ 2 warnings · f2 to view",
+].join("\n");
+
+test("a Codex done read stops at the prompt box instead of sending its footer", () => {
+  const text = doneSnippet(CODEX_DONE);
+  assert.ok(text.startsWith("• 我会按 app-store-release-notes"), text);
+  assert.match(text, /• 相较 1\.4\.0 标签，主要更新：/);
+  assert.match(text, /设置页保留上次的选择/);
+  for (const footer of [/GPT-6-Astra/, /for shortcuts/, /Ask Codex/, /总结一下版本改动点/]) {
+    assert.doesNotMatch(text, footer);
+  }
+  // A draft typed into the box is still the box, not a turn.
+  assert.equal(doneSnippet(CODEX_DONE.replace("Ask Codex to do anything", "再补一下测试")), text);
+});
+
+test("a Codex pane mid-repaint has no done answer yet", () => {
+  // Only the box and the footer are drawn: the done read must keep waiting
+  // rather than settle on the footer.
+  const repainting = CODEX_DONE.split("\n").slice(-4).join("\n");
+  assert.equal(doneSnippet(repainting), "");
+  // Captured live from Codex 0.157.1 on another machine: a different effort
+  // word, an absolute path, and the older "»" box.
+  const other = [
+    "» Ask Codex to do anything",
+    "",
+    "  GPT-6-Astra ultra · /private/tmp/herdr-demo/shop-api",
+    "  ? for shortcuts                                                        ⚠ 2 warnings · f2 to view",
+  ].join("\n");
+  assert.equal(doneSnippet(other), "");
+});
+
 test("extractReadText prefers result.read.text", () => {
   assert.equal(
     extractReadText({ result: { read: { text: "last turn" }, text: "no" } }),

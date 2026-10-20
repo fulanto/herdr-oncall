@@ -2,8 +2,11 @@ import {
   OLD_PLUGIN_IDS,
   PLUGIN_ID,
   channelList,
+  ensureIntegrations,
   feishuPaired,
+  integrationLines,
   loadDotEnv,
+  missingIntegrations,
   panelState,
   pluginRoot,
   runHerdr,
@@ -39,6 +42,10 @@ loadDotEnv();
 console.log(`plugin: ${PLUGIN_ID}`);
 console.log(`config: ${envPath}`);
 console.log(`poller: ${pid}`);
+const integrations = integrationLines(ensureIntegrations());
+if (integrations.length) {
+  console.log(integrations.join("\n"));
+}
 console.log(
   setupHints({
     panel: panelState(),
@@ -46,6 +53,7 @@ console.log(
     chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
     feishu: feishuPaired(),
     channels: channelList(),
+    integrations: missingIntegrations(),
     envPath,
   }).join("\n"),
 );

@@ -3,6 +3,7 @@ import {
   feishuPaired,
   formatMessage,
   loadDotEnv,
+  missingIntegrations,
   panelState,
   remoteChannels,
   seedConfigEnv,
@@ -55,6 +56,7 @@ async function testPanel() {
       chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
       feishu: feishuPaired(),
       channels: channelList(),
+      integrations: missingIntegrations(),
       envPath,
     });
     console.error(["nothing to test yet:", ...hints].join("\n"));

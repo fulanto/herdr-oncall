@@ -29,7 +29,7 @@ The interesting part isn't the notification — it's not sending one.
 
 **It parses the dialog structurally.** Options come from the numbered run at the *bottom* of the screen, never the first one found — a workflow's phase list is not a set of choices. Block boundaries come from the UI's own structure (turn markers, drawn rules, paragraph breaks), never from a "last N lines" guess.
 
-**It never sends the transcript.** Blocked sends the tool call and the dialog. Done sends the last assistant turn. That's it.
+**It never sends the transcript.** Blocked sends the tool call and the dialog. Done sends the agent's last answer — taken from its own session record, so nothing the agent draws around it can leak in. That's it.
 
 **Only you can drive your panes.** Messages from any chat other than your paired `TELEGRAM_CHAT_ID`, or any Feishu user other than the one who scanned the pairing code (`FEISHU_OPEN_ID`), are dropped, on both the message and the button path.
 
@@ -48,6 +48,8 @@ herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 ```
 
 With no channel paired, `test` opens a test panel instead of sending a ping.
+
+A done ping carries the agent's own last answer, read from its session record rather than off the screen, with nothing to set up. Claude Code keeps a record per running process, so Oncall finds the session itself, even one started before Oncall was installed. Codex keeps no such record, so Oncall installs Herdr's Codex integration for you: at install, at every Herdr start, and — for Codex installed after Oncall — the first time a Codex pane finishes a turn (`INSTALL_AGENT_INTEGRATION=0` leaves Codex's config alone). Codex then asks once to trust the new hook, and a Codex session that was already running needs one restart. Until then, its done pings are read off the screen.
 
 A phone channel is optional, for when you are away from the desk. Pick Feishu or Telegram (or both).
 
@@ -112,6 +114,7 @@ Your `.env` survives reinstalls.
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | set by `pair-feishu` | the bot the scan created |
 | `FEISHU_OPEN_ID` | set by `pair-feishu` | the only Feishu user allowed to drive your panes |
 | `FEISHU_DOMAIN` | set by `pair-feishu` | `feishu` or `lark` |
+| `INSTALL_AGENT_INTEGRATION` | `1` | install Herdr's Codex integration at startup, so Codex done pings read Codex's own answer. `0` = never touch agent configs |
 | `TELEGRAM_BOT_TOKEN` | required for Telegram | BotFather token |
 | `TELEGRAM_CHAT_ID` | set by pairing | the only chat allowed to drive your panes |
 | `TELEGRAM_POLL` | `1` | long-poll for replies |
@@ -131,7 +134,7 @@ herdr plugin action invoke toggle --plugin com.codreamer.herdr.oncall
 
 ## What it will not do
 
-- Send the full pane transcript. Blocked gets the dialog, done gets the last turn.
+- Send the full pane transcript. Blocked gets the dialog, done gets the last answer.
 - Ship a phone app. Telegram and Feishu are the remote channels; a thin app would talk to this same plugin.
 - Show a system notification banner with buttons — macOS only allows that for a signed app bundle, so the panel is a plain floating window instead.
 

@@ -1,5 +1,15 @@
 import { dirname } from "node:path";
-import { channelList, feishuPaired, loadDotEnv, panelState, seedConfigEnv, setupHints } from "../lib/index.mjs";
+import {
+  channelList,
+  ensureIntegrations,
+  feishuPaired,
+  integrationLines,
+  loadDotEnv,
+  missingIntegrations,
+  panelState,
+  seedConfigEnv,
+  setupHints,
+} from "../lib/index.mjs";
 import { restartPoller } from "../inbound/poller.mjs";
 
 const envPath = seedConfigEnv();
@@ -10,6 +20,12 @@ loadDotEnv();
 console.log(`config: ${envPath}`);
 console.log(`example: ${dirname(envPath)}/.env.example`);
 console.log(`poller: ${pid}`);
+// Every build and every Herdr start, so an agent installed after Oncall is
+// covered too; once installed, this is one `integration status` call.
+const integrations = integrationLines(ensureIntegrations());
+if (integrations.length) {
+  console.log(integrations.join("\n"));
+}
 console.log(
   setupHints({
     panel: panelState(),
@@ -17,6 +33,7 @@ console.log(
     chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
     feishu: feishuPaired(),
     channels: channelList(),
+    integrations: missingIntegrations(),
     envPath,
   }).join("\n"),
 );

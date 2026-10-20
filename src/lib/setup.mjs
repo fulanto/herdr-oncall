@@ -11,6 +11,18 @@ function action(id, indent = "  ") {
   return `${indent}herdr plugin action invoke ${id} --plugin ${PLUGIN_ID}`;
 }
 
+// What `ensureIntegrations` did, for the setup output. An agent installed just
+// now only reports sessions it starts from here on.
+export function integrationLines({ installed = [], failed = [] } = {}) {
+  return [
+    ...installed.map(
+      (agent) =>
+        `${agent}: installed Herdr's ${agent} integration, so done pings carry its own answer (restart ${agent} sessions already running)`,
+    ),
+    ...failed.map(({ agent, detail }) => `${agent}: herdr integration install ${agent} failed: ${detail}`),
+  ];
+}
+
 // Feishu replies arrive over a WebSocket, which Node only has built in from 22.
 function nodeTooOld(websocket, nodeVersion) {
   return websocket ? undefined : `replies need Node 22 or later, this is ${nodeVersion}`;
@@ -43,6 +55,7 @@ export function setupHints({
   envPath,
   websocket = typeof globalThis.WebSocket === "function",
   nodeVersion = process.version,
+  integrations = [],
 }) {
   const lines = [];
   if (PANEL_HINTS[panel]) {
@@ -73,6 +86,17 @@ export function setupHints({
       token ? "  telegram: token set, chat not paired yet:" : `  telegram: put TELEGRAM_BOT_TOKEN in ${envPath}, then:`,
       action("pair", "    "),
     );
+  }
+  // `integrations` lists the agents still without the Herdr integration they
+  // need — Codex, whose panes cannot otherwise be tied to a session. Oncall
+  // installs it itself, so this only shows when that was turned off or failed.
+  // Those done pings fall back to reading the answer off the screen.
+  if (integrations.length) {
+    lines.push("done pings: these agents need Herdr's integration to report their session:");
+    for (const agent of integrations) {
+      lines.push(`  herdr integration install ${agent}`);
+    }
+    lines.push("  (an agent already running picks it up once restarted)");
   }
   if (panel === "ready" || telegram || feishu) {
     lines.push("check it:", action("test"));

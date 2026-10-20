@@ -390,25 +390,41 @@ export function doneSnippet(screen, limit = 40) {
   if (!lines.length) {
     return "";
   }
-  let userIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (isUserMarker(lines[i])) {
-      userIdx = i;
-    }
+  const users = lines.flatMap((line, index) => (isUserMarker(line) ? [index] : []));
+  let start = users.at(-1) ?? -1;
+  let end = lines.length;
+  // The prompt box reads exactly like a turn the user sent: Claude Code draws
+  // it as "❯ <whatever is typed>", Codex as "› Ask Codex to do anything" even
+  // when it is empty, and only footers sit under it. Telling it apart by
+  // recognising every footer kept failing as the agents grew new ones — Codex's
+  // model line and shortcut hints made a done ping whose whole body was the
+  // footer. Where the agent's turns are on screen, structure settles it: a user
+  // line with no turn after it is the box, so the last turn ends there and
+  // starts at the user line before it.
+  if (start >= 0 && lines.slice(0, start).some(isTurnStart) && !lines.slice(start + 1).some(isTurnStart)) {
+    end = start;
+    start = users.at(-2) ?? -1;
   }
-  let body = trimBodyTail(userIdx >= 0 ? lines.slice(userIdx + 1) : []);
+  let body = trimBodyTail(lines.slice(start + 1, end));
   // Nothing left under that "user turn" means it was the prompt box, not a
-  // message: Claude Code draws the box as "❯ <whatever is typed>", which reads
-  // exactly like a turn the user sent, and below it there is only chrome. Fall
-  // back to the tail so the ping carries the agent's answer rather than
-  // whatever survived underneath the box.
+  // message, on a screen with no turn to anchor on. Fall back to the tail so
+  // the ping carries the agent's answer rather than whatever survived
+  // underneath the box.
   if (!body.length) {
-    body = trimBodyTail(lines.slice(-limit));
+    body = trimBodyTail(lines.slice(0, end).slice(-limit));
   }
   if (body.length > limit) {
     body = body.slice(-limit);
   }
   return capSnippet(body.join("\n").trim());
+}
+
+// The first line of an agent's turn: "⏺" or "●" in Claude Code, "•" in Codex.
+// Unlike `isTurnMarker`, which bounds a dialog, it takes Codex's bullet — and
+// only at the left edge, because Codex draws the list items inside an answer
+// with the same glyph, indented.
+function isTurnStart(line) {
+  return /^\s?[⏺●⚫•]\s+\S/.test(line);
 }
 
 function trimBodyTail(body) {
@@ -481,6 +497,16 @@ function isChromeLine(line) {
   // Status footers the agents draw under everything else: Claude Code's
   // "➜ repo git:(main) ctx:33% Opus 5", Codex's "» Ask Codex to do anything".
   if (/\bctx:\d+%/.test(text) || /^»\s/.test(text)) {
+    return true;
+  }
+  // Codex's footer under its prompt box: the model line "GPT-6-Astra high ·
+  // ~/repo · branch" (model, reasoning effort, then the working directory) and
+  // the hint line "← for agents · ? for shortcuts   ⚠ 2 warnings · f2 to view".
+  // A done event lands while Codex repaints, when these and the box are all
+  // there is, and read as content they made the ping out of the footer alone.
+  // The effort word is not listed: the first capture said `high`, the next
+  // machine said `ultra`. Model, one word, a dot, a path is the shape.
+  if (/^[\w.-]+(?:\s+[\w.-]+)?\s+·\s+[~/]/.test(text) || /(?:^|\s)\?\s+for shortcuts\b/i.test(text)) {
     return true;
   }
   // Claude Code's task list, drawn under the prompt box and so *below* a live
