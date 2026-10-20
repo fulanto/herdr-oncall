@@ -41,7 +41,7 @@ herdr plugin install fulanto/herdr-oncall --yes
 
 That compiles the desktop panel and starts the reply poller — no Herdr restart needed.
 
-On a Mac that is all the setup there is: blocked and done open the panel straight away, with no Telegram configured. Check it:
+On a Mac that is all the setup there is: blocked and done open the panel straight away, with no phone channel configured. Check it:
 
 ```sh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
