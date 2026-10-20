@@ -41,7 +41,15 @@ herdr plugin install fulanto/herdr-oncall --yes
 
 That compiles the desktop panel and starts the Telegram poller — no Herdr restart needed.
 
-The panel works on its own. For Telegram, add a bot token and pair your chat:
+On a Mac that is all the setup there is: blocked and done open the panel straight away, with no Telegram configured. Check it:
+
+```sh
+herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
+```
+
+With no chat paired, `test` opens a test panel instead of sending a ping.
+
+Telegram is optional, for when you are away from the desk. Add a bot token and pair your chat:
 
 ```sh
 herdr plugin config-dir com.codreamer.herdr.oncall
@@ -50,9 +58,10 @@ herdr plugin config-dir com.codreamer.herdr.oncall
 Put `TELEGRAM_BOT_TOKEN=…` (from [@BotFather](https://t.me/BotFather)) in the `.env` there and leave `TELEGRAM_CHAT_ID` empty, then:
 
 ```sh
-herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
 herdr plugin action invoke pair --plugin com.codreamer.herdr.oncall
 ```
+
+The poller rereads `.env` on every pass, so it picks the token up without a restart.
 
 Scan the terminal QR or open the printed `t.me/…?start=…` link. The poller writes `TELEGRAM_CHAT_ID` for you. Send a test ping:
 
@@ -69,7 +78,7 @@ Reply to it in Telegram — you should get `sent · …` back.
 
 - **Herdr** ≥ 0.7.0 and **Node.js** ≥ 18. No npm dependencies — `node:` builtins and `fetch` only.
 - **The desktop panel is macOS-only** and needs Xcode Command Line Tools (`xcode-select --install`). Install compiles `src/desktop/panel.swift` once; without `swiftc` the panel is skipped and Telegram still works.
-- Pairing QR codes use `qrencode`, installed automatically via Homebrew on macOS or your system package manager on Linux (needs root or passwordless `sudo` there).
+- Pairing QR codes use `qrencode`, installed automatically via Homebrew on macOS or your system package manager on Linux (needs root or passwordless `sudo` there). If that fails, install carries on and `pair` prints the link without a QR code.
 - If the plugin log says `node not found`, start Herdr from a terminal where `command -v node` works.
 
 Your `.env` survives reinstalls.

@@ -77,19 +77,25 @@ export function panelBinaryPath() {
   return join(pluginRoot, "bin", PANEL_BINARY);
 }
 
-export function panelEnabled() {
-  return process.platform === "darwin" && envFlag("DESKTOP_PANEL", true);
+// Whether the panel can open, and if not, why: "ready" | "off" | "unbuilt" |
+// "unsupported". The setup and test actions say which one, because a user with
+// no Telegram has nothing else to tell them whether the plugin works.
+export function panelState({ platform = process.platform, binary = panelBinaryPath() } = {}) {
+  if (platform !== "darwin") {
+    return "unsupported";
+  }
+  if (!envFlag("DESKTOP_PANEL", true)) {
+    return "off";
+  }
+  try {
+    return statSync(binary).isFile() ? "ready" : "unbuilt";
+  } catch {
+    return "unbuilt";
+  }
 }
 
 export function panelAvailable() {
-  if (!panelEnabled()) {
-    return false;
-  }
-  try {
-    return statSync(panelBinaryPath()).isFile();
-  } catch {
-    return false;
-  }
+  return panelState() === "ready";
 }
 
 export function panelTimeoutMs(raw = process.env.DESKTOP_PANEL_TIMEOUT_SEC) {

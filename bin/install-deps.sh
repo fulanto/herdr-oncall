@@ -26,8 +26,7 @@ install_macos() {
     brew_bin="$(command -v brew)"
   fi
   if [[ -z "$brew_bin" ]]; then
-    echo "qrencode is required for terminal pairing QR codes, but Homebrew was not found." >&2
-    echo "Install Homebrew, then reinstall the plugin." >&2
+    echo "qrencode is installed with Homebrew, which was not found." >&2
     return 1
   fi
   "$brew_bin" install qrencode
@@ -57,7 +56,7 @@ install_linux() {
   elif command -v apk >/dev/null 2>&1; then
     run_root apk add qrencode
   else
-    echo "qrencode is required, but no supported package manager was found." >&2
+    echo "qrencode: no supported package manager was found." >&2
     return 1
   fi
 }
@@ -68,8 +67,8 @@ ensure_qrencode() {
     return 0
   fi
   case "$(uname -s)" in
-    Darwin) install_macos ;;
-    Linux) install_linux ;;
+    Darwin) install_macos || return 1 ;;
+    Linux) install_linux || return 1 ;;
     *)
       echo "Automatic qrencode installation is not supported on this platform." >&2
       return 1
@@ -110,5 +109,10 @@ build_panel() {
   fi
 }
 
-ensure_qrencode
+# The QR code is a convenience: `pair` prints its link either way. Letting a
+# missing Homebrew fail the whole build, as it used to, cost a user who never
+# pairs Telegram the panel too, since the panel is compiled after this.
+if ! ensure_qrencode; then
+  echo "qrencode unavailable; Telegram pairing prints its link without a QR code." >&2
+fi
 build_panel

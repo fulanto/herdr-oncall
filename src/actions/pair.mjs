@@ -51,6 +51,11 @@ function printQr(url) {
     console.log(printed.stdout);
     return;
   }
+  // Install no longer fails without qrencode, so its absence is expected.
+  if (printed.error?.code === "ENOENT") {
+    console.log("(no QR code: qrencode is not installed, open the link above)");
+    return;
+  }
   const detail = printed.error?.message || printed.stderr?.trim() || `exit ${printed.status}`;
   console.error(`qrencode failed: ${detail}`);
 }

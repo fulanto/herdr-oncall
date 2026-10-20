@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { panelLabels, panelTimeoutMs, parsePanelResult } from "../src/lib/index.mjs";
+import { panelLabels, panelState, panelTimeoutMs, parsePanelResult } from "../src/lib/index.mjs";
 
 test("parsePanelResult reads the last stdout line", () => {
   assert.deepEqual(parsePanelResult("button:2\n"), { kind: "button", index: 2 });
@@ -37,4 +40,27 @@ test("panelLabels numbers options like the Telegram keyboard", () => {
     { key: "3", send: "esc", label: "No, and tell Codex what to do differently" },
   ]);
   assert.deepEqual(labels, ["1. Yes, proceed", "3. No, and tell Codex what to do differently"]);
+});
+
+test("panelState says why the panel cannot open", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oncall-panel-state-"));
+  const binary = join(dir, "oncall-panel");
+  const previous = process.env.DESKTOP_PANEL;
+  try {
+    delete process.env.DESKTOP_PANEL;
+    assert.equal(panelState({ platform: "darwin", binary }), "unbuilt");
+    assert.equal(panelState({ platform: "darwin", binary: dir }), "unbuilt");
+    writeFileSync(binary, "");
+    assert.equal(panelState({ platform: "darwin", binary }), "ready");
+    assert.equal(panelState({ platform: "linux", binary }), "unsupported");
+    process.env.DESKTOP_PANEL = "0";
+    assert.equal(panelState({ platform: "darwin", binary }), "off");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.DESKTOP_PANEL;
+    } else {
+      process.env.DESKTOP_PANEL = previous;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

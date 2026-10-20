@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { seedConfigEnv } from "./config.mjs";
+import { seedConfigEnv, setDotEnvValue } from "./config.mjs";
 import { stateDir } from "./paths.mjs";
 
 export const PAIR_TTL_MS = 10 * 60 * 1000;
@@ -87,6 +87,6 @@ export function upsertEnvValue(key, value) {
     content = `${content.replace(/\s*$/, "")}\n${line}\n`;
   }
   writeFileSync(dest, content, "utf8");
-  process.env[key] = String(value);
+  setDotEnvValue(key, String(value), dest);
   return dest;
 }

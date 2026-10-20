@@ -36,11 +36,62 @@ function upgradeEnvKeys(envPath) {
   }
 }
 
+// Keys this process set from a .env file, each with the value it set and the
+// file it came from. "The environment wins" is about what the process was
+// started with; a value it read from a file is the file's to change. Treating
+// the two alike is what kept the poller, the one long-lived process, on the
+// empty `TELEGRAM_BOT_TOKEN=` it read at startup: a token filled in after
+// install never reached it, pairing waited on a poller that could not hear the
+// code, and only a restart through the `poll` action got anything through.
+const fromDotEnv = new Map();
+
 export function loadDotEnv(path) {
   const paths = path ? [path] : defaultDotEnvPaths();
+  const values = new Map();
   for (const candidate of paths) {
-    loadDotEnvFile(candidate);
+    for (const [key, value] of readDotEnvFile(candidate)) {
+      if (!values.has(key)) {
+        values.set(key, { value, source: candidate });
+      }
+    }
   }
+  for (const [key, mine] of fromDotEnv) {
+    if (process.env[key] !== mine.value) {
+      // Changed by someone else since it was read: theirs now.
+      fromDotEnv.delete(key);
+    } else if (!values.has(key) && paths.includes(mine.source)) {
+      // A line deleted from a file that was read takes its value with it.
+      delete process.env[key];
+      fromDotEnv.delete(key);
+    }
+  }
+  for (const [key, entry] of values) {
+    if (process.env[key] !== undefined && !fromDotEnv.has(key)) {
+      continue;
+    }
+    process.env[key] = entry.value;
+    fromDotEnv.set(key, entry);
+  }
+}
+
+// A value this process wrote to a .env file itself, as pairing does with the
+// chat id. It is the file's value, so a later edit to the file still reaches it.
+export function setDotEnvValue(key, value, source) {
+  process.env[key] = value;
+  fromDotEnv.set(key, { value, source });
+}
+
+// The environment this process was started with, without what it read from a
+// .env. A child handed the loaded values would take them for its own
+// environment, which a file never overwrites, and would not see the file change.
+export function startupEnv() {
+  const env = { ...process.env };
+  for (const [key, mine] of fromDotEnv) {
+    if (env[key] === mine.value) {
+      delete env[key];
+    }
+  }
+  return env;
 }
 
 function defaultDotEnvPaths() {
@@ -52,17 +103,18 @@ function defaultDotEnvPaths() {
   return [...new Set([join(configDirPath(), ".env"), join(pluginRoot, ".env")])];
 }
 
-function loadDotEnvFile(path) {
+function readDotEnvFile(path) {
   let content;
   try {
     content = readFileSync(path, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return;
+      return [];
     }
     throw error;
   }
 
+  const entries = [];
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) {
@@ -74,11 +126,12 @@ function loadDotEnvFile(path) {
     }
     const key = line.slice(0, equals).trim();
     const value = line.slice(equals + 1).trim();
-    if (!key || process.env[key] !== undefined) {
+    if (!key) {
       continue;
     }
-    process.env[key] = stripQuotes(value);
+    entries.push([key, stripQuotes(value)]);
   }
+  return entries;
 }
 
 export function envFlag(name, fallback) {

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pluginRoot, stateDir } from "../lib/index.mjs";
+import { pluginRoot, startupEnv, stateDir } from "../lib/index.mjs";
 
 const LOG_MAX_BYTES = 256 * 1024;
 
@@ -119,7 +119,9 @@ export function startPoller() {
     cwd: pluginRoot,
     detached: true,
     stdio: log === undefined ? "ignore" : ["ignore", log, log],
-    env: { ...process.env },
+    // Not the .env this process loaded: the poller reads that itself, and keeps
+    // reading it, which it could not do if it inherited the values as its own.
+    env: startupEnv(),
   });
   if (log !== undefined) {
     // The child holds its own duplicate; leaving this one open would pin the

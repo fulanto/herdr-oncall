@@ -23,6 +23,8 @@ function reportIdle(reason) {
 }
 
 while (true) {
+  // Every pass, so a token filled in after install, or a rotated one, reaches
+  // the poller without a restart.
   loadDotEnv();
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
   const chatId = process.env.TELEGRAM_CHAT_ID?.trim();

@@ -1,4 +1,13 @@
-import { OLD_PLUGIN_IDS, PLUGIN_ID, pluginRoot, runHerdr, seedConfigEnv } from "../lib/index.mjs";
+import {
+  OLD_PLUGIN_IDS,
+  PLUGIN_ID,
+  loadDotEnv,
+  panelState,
+  pluginRoot,
+  runHerdr,
+  seedConfigEnv,
+  setupHints,
+} from "../lib/index.mjs";
 import { restartPoller } from "../inbound/poller.mjs";
 
 const alreadyLinked = process.env.HERDR_PLUGIN_ID === PLUGIN_ID;
@@ -22,9 +31,18 @@ if (!alreadyLinked) {
 
 const envPath = seedConfigEnv();
 const pid = restartPoller();
+// Read only for the hints below, after the poller is spawned, so the poller
+// still loads its own .env exactly as it did before.
+loadDotEnv();
 console.log(`plugin: ${PLUGIN_ID}`);
 console.log(`config: ${envPath}`);
 console.log(`poller: ${pid}`);
-console.log("fill TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, then:");
-console.log(`  herdr plugin action invoke test --plugin ${PLUGIN_ID}`);
+console.log(
+  setupHints({
+    panel: panelState(),
+    token: process.env.TELEGRAM_BOT_TOKEN?.trim(),
+    chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
+    envPath,
+  }).join("\n"),
+);
 
