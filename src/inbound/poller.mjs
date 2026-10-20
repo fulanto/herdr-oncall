@@ -113,13 +113,15 @@ function openPollerLog() {
   }
 }
 
-export function startPoller() {
+// A background node process whose output lands in `poller.log`: the poller
+// itself, and the worker that waits for a Feishu scan.
+export function spawnDetached(script, args = []) {
   const log = openPollerLog();
-  const child = spawn("/bin/bash", [join(pluginRoot, "bin/run-node.sh"), "src/hooks/poll.mjs"], {
+  const child = spawn("/bin/bash", [join(pluginRoot, "bin/run-node.sh"), script, ...args], {
     cwd: pluginRoot,
     detached: true,
     stdio: log === undefined ? "ignore" : ["ignore", log, log],
-    // Not the .env this process loaded: the poller reads that itself, and keeps
+    // Not the .env this process loaded: the child reads that itself, and keeps
     // reading it, which it could not do if it inherited the values as its own.
     env: startupEnv(),
   });
@@ -128,9 +130,14 @@ export function startPoller() {
     // file in every hook process that ever started a poller.
     closeSync(log);
   }
-  writePollerPid(child.pid);
   child.unref();
   return child.pid;
+}
+
+export function startPoller() {
+  const pid = spawnDetached("src/hooks/poll.mjs");
+  writePollerPid(pid);
+  return pid;
 }
 
 export function restartPoller() {

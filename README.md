@@ -2,7 +2,7 @@
 
 **Your coding agent hit a permission prompt. You're in another app, on another desktop, or out for coffee. Oncall gets you back in the loop — and lets you answer without going back.**
 
-A [Herdr](https://herdr.dev) plugin that watches your agent panes and, the moment one blocks on a prompt or finishes a turn, puts the decision in front of you: a floating panel on your Mac with one button per option, or a Telegram message when you're away from the desk. Either way, your answer goes straight back into the pane.
+A [Herdr](https://herdr.dev) plugin that watches your agent panes and, the moment one blocks on a prompt or finishes a turn, puts the decision in front of you: a floating panel on your Mac with one button per option, or a Telegram or Feishu message when you're away from the desk. Either way, your answer goes straight back into the pane.
 
 ![The Oncall panel: a floating window naming the repo, branch and pane, showing the permission dialog, with a button per option and a free-text field](docs/panel.png)
 
@@ -16,7 +16,7 @@ Oncall closes that gap:
 
 - **It tells you which task, not just that something happened.** Every notification leads with `repo · branch · pane` — `acme-api · feature/checkout-v2 · pane 2`, not "an agent needs attention".
 - **You answer from where you already are.** The panel floats above whatever you're doing and follows you across Spaces. Click a button, hit Enter for option 1, Cmd+N for option N, or type a free-text answer.
-- **It reaches your phone when the desk doesn't work.** No answer within `BLOCKED_DELAY_SEC` (60s default) and Telegram takes over, with the same buttons.
+- **It reaches your phone when the desk doesn't work.** No answer within `BLOCKED_DELAY_SEC` (60s default) and Telegram or Feishu takes over, with the same buttons.
 - **It shuts up when it should.** Nothing pops up while you're already looking at that pane. The panel closes itself the moment you answer in the terminal, or when you switch to the pane yourself.
 
 ## How it decides to bother you
@@ -31,7 +31,7 @@ The interesting part isn't the notification — it's not sending one.
 
 **It never sends the transcript.** Blocked sends the tool call and the dialog. Done sends the last assistant turn. That's it.
 
-**Only your chat can drive your panes.** Messages from any chat other than your paired `TELEGRAM_CHAT_ID` are dropped, on both the message and the button-callback path.
+**Only you can drive your panes.** Messages from any chat other than your paired `TELEGRAM_CHAT_ID`, or any Feishu user other than the one who scanned the pairing code (`FEISHU_OPEN_ID`), are dropped, on both the message and the button path.
 
 ## Install
 
@@ -39,7 +39,7 @@ The interesting part isn't the notification — it's not sending one.
 herdr plugin install fulanto/herdr-oncall --yes
 ```
 
-That compiles the desktop panel and starts the Telegram poller — no Herdr restart needed.
+That compiles the desktop panel and starts the reply poller — no Herdr restart needed.
 
 On a Mac that is all the setup there is: blocked and done open the panel straight away, with no Telegram configured. Check it:
 
@@ -47,9 +47,23 @@ On a Mac that is all the setup there is: blocked and done open the panel straigh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 ```
 
-With no chat paired, `test` opens a test panel instead of sending a ping.
+With no channel paired, `test` opens a test panel instead of sending a ping.
 
-Telegram is optional, for when you are away from the desk. Add a bot token and pair your chat:
+A phone channel is optional, for when you are away from the desk. Pick Feishu or Telegram (or both).
+
+### Feishu: scan to pair
+
+```sh
+herdr plugin action invoke pair-feishu --plugin com.codreamer.herdr.oncall
+```
+
+On a Mac a panel with a QR code opens; elsewhere the code and its link are in `herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5`. Scan it with the Feishu (or Lark) app and approve. That one scan creates your Oncall bot, and whoever scanned is the only Feishu user it will take answers from. The bot messages you `paired`, and `.env` gets `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_OPEN_ID`, `FEISHU_DOMAIN` and `CHANNEL=feishu`.
+
+A blocked ping arrives as a card with one button per option; the card replaces its buttons with what was sent once you tap. To answer with text, reply to the ping (quote it); a plain message goes to the pane the last ping was about. Receiving replies needs Node 22 or later, since Feishu delivers them over a WebSocket.
+
+### Telegram
+
+Add a bot token and pair your chat:
 
 ```sh
 herdr plugin config-dir com.codreamer.herdr.oncall
@@ -63,22 +77,26 @@ herdr plugin action invoke pair --plugin com.codreamer.herdr.oncall
 
 The poller rereads `.env` on every pass, so it picks the token up without a restart.
 
-Scan the terminal QR or open the printed `t.me/…?start=…` link. The poller writes `TELEGRAM_CHAT_ID` for you. Send a test ping:
+Scan the terminal QR or open the printed `t.me/…?start=…` link. The poller writes `TELEGRAM_CHAT_ID` for you.
+
+### Check it
+
+Send a test ping:
 
 ```sh
 herdr plugin action invoke test --plugin com.codreamer.herdr.oncall
 herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5
 ```
 
-Reply to it in Telegram — you should get `sent · …` back.
+Reply to it — you should get `sent · …` back.
 
 `plugin action invoke` returns JSON immediately; the real output is in `plugin log list`.
 
 ### Requirements
 
-- **Herdr** ≥ 0.7.0 and **Node.js** ≥ 18. No npm dependencies — `node:` builtins and `fetch` only.
-- **The desktop panel is macOS-only** and needs Xcode Command Line Tools (`xcode-select --install`). Install compiles `src/desktop/panel.swift` once; without `swiftc` the panel is skipped and Telegram still works.
-- Pairing QR codes use `qrencode`, installed automatically via Homebrew on macOS or your system package manager on Linux (needs root or passwordless `sudo` there). If that fails, install carries on and `pair` prints the link without a QR code.
+- **Herdr** ≥ 0.7.0 and **Node.js** ≥ 18 (≥ 22 to receive Feishu replies). No npm dependencies — `node:` builtins and `fetch` only.
+- **The desktop panel is macOS-only** and needs Xcode Command Line Tools (`xcode-select --install`). Install compiles `src/desktop/panel.swift` once; without `swiftc` the panel is skipped and the phone channels still work.
+- Pairing QR codes in the terminal use `qrencode`, installed automatically via Homebrew on macOS or your system package manager on Linux (needs root or passwordless `sudo` there). If that fails, install carries on and `pair` prints the link without a QR code. The Feishu panel draws its own QR code.
 - If the plugin log says `node not found`, start Herdr from a terminal where `command -v node` works.
 
 Your `.env` survives reinstalls.
@@ -88,19 +106,22 @@ Your `.env` survives reinstalls.
 | key | default | meaning |
 |---|---|---|
 | `NOTIFY_ON` | `blocked,done` | which statuses to notify on |
-| `BLOCKED_DELAY_SEC` | `60` | how long the panel waits before Telegram takes over. `0` = ping immediately |
+| `BLOCKED_DELAY_SEC` | `60` | how long the panel waits before the phone takes over. `0` = ping immediately |
 | `DEBOUNCE_MS` | `2000` | suppress a repeat of the same pane + status |
+| `CHANNEL` | `telegram` | where pings go: `telegram`, `feishu`, or `telegram,feishu`. Replies are taken from every paired channel |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | set by `pair-feishu` | the bot the scan created |
+| `FEISHU_OPEN_ID` | set by `pair-feishu` | the only Feishu user allowed to drive your panes |
+| `FEISHU_DOMAIN` | set by `pair-feishu` | `feishu` or `lark` |
 | `TELEGRAM_BOT_TOKEN` | required for Telegram | BotFather token |
 | `TELEGRAM_CHAT_ID` | set by pairing | the only chat allowed to drive your panes |
 | `TELEGRAM_POLL` | `1` | long-poll for replies |
 | `TELEGRAM_FORCE_REPLY` | `1` | force a reply box on pings |
-| `DESKTOP_PANEL` | `1` | the macOS panel; `0` = Telegram only |
+| `DESKTOP_PANEL` | `1` | the macOS panel; `0` = phone only |
 | `DESKTOP_PANEL_TIMEOUT_SEC` | `BLOCKED_DELAY_SEC` | how long the panel stays open |
 | `DESKTOP_PANEL_TERMINALS` | empty | extra terminal bundle ids that count as "you're at the pane" |
 | `DESKTOP_PANEL_DEBUG` | empty | `1` logs the screen and window rect the panel was placed on |
 | `HERDR_TELEGRAM_ENABLED` | `1` | start enabled; toggle with the `toggle` action |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set the host terminal title while on |
-| `CHANNEL` | `telegram` | delivery path |
 
 Toggle it off without uninstalling:
 
@@ -111,13 +132,13 @@ herdr plugin action invoke toggle --plugin com.codreamer.herdr.oncall
 ## What it will not do
 
 - Send the full pane transcript. Blocked gets the dialog, done gets the last turn.
-- Ship a phone app. Telegram is the remote channel; a thin app would talk to this same plugin.
+- Ship a phone app. Telegram and Feishu are the remote channels; a thin app would talk to this same plugin.
 - Show a system notification banner with buttons — macOS only allows that for a signed app bundle, so the panel is a plain floating window instead.
 
 ## Development
 
 ```sh
-node --test 'test/*.test.mjs'        # 46 tests, node's built-in runner
+node --test 'test/*.test.mjs'        # node's built-in runner
 bash install.sh                      # link this checkout into Herdr
 bash bin/install-deps.sh             # rebuild the panel after editing panel.swift
 ```
@@ -126,10 +147,10 @@ bash bin/install-deps.sh             # rebuild the panel after editing panel.swi
 herdr-plugin.toml     manifest: actions, event hooks, build steps
 bin/                  node locator, dependency install, compiled panel
 src/desktop/          panel.swift — the macOS floating panel
-src/lib/              screen parsing, Herdr calls, config, Telegram
-src/hooks/            notify (event hook) + poll (Telegram long-poller)
+src/lib/              screen parsing, Herdr calls, config, Telegram, Feishu
+src/hooks/            notify (event hook) + poll (Telegram long-poll, Feishu long connection)
 src/inbound/          replies and delivery back into the pane
-src/actions/          setup, pair, test, toggle, poll
+src/actions/          setup, pair, pair-feishu, test, toggle, poll
 test/
 ```
 

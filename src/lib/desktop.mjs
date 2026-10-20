@@ -240,7 +240,8 @@ export function panelStderr(text) {
 
 // `until` is polled every `watchMs`; when it returns a truthy value the panel
 // is closed and the result is { kind: "resolved", reason } where reason is
-// that value (a string such as "moved-on" or "at-pane").
+// that value (a string such as "moved-on" or "at-pane"). `qr` turns the panel
+// into a QR code of that text with the body as its caption, for pairing.
 export function showPanel({
   paneId,
   title,
@@ -252,6 +253,7 @@ export function showPanel({
   watchMs = 2000,
   binary = panelBinaryPath(),
   kind,
+  qr,
 }) {
   if (!existsSync(binary)) {
     return Promise.resolve({ kind: "unavailable" });
@@ -260,7 +262,14 @@ export function showPanel({
     return Promise.resolve({ kind: "yielded" });
   }
   const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
-  const args = [String(timeoutSec), title, where, body || "", ...panelLabels(options)];
+  const args = [
+    ...(qr ? ["--qr", qr] : []),
+    String(timeoutSec),
+    title,
+    where,
+    body || "",
+    ...panelLabels(options),
+  ];
   return new Promise((resolve) => {
     let child;
     try {

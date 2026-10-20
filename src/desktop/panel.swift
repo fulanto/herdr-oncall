@@ -1,25 +1,36 @@
 import AppKit
+import CoreImage
 
 // oncall desktop panel.
 //
-// usage: oncall-panel <timeout-sec> <title> <where> <body> [option-label ...]
+// usage: oncall-panel [--qr <text>] <timeout-sec> <title> <where> <body> [option-label ...]
 // stdout (one line): button:<index> | text:<answer> | timeout | dismiss
 //
 // A floating, non-activating panel in the top-right corner of the screen
 // under the mouse. It joins every Space so the user does not have to switch
 // desktops. Enter in the empty field picks the first option; Cmd+1..9 pick
 // options by number; Esc or the close button dismisses.
+//
+// With --qr the body and the text field give way to a QR code of <text>, with
+// <body> as its caption: the pairing panel. Whoever spawned it closes it once
+// the code has been scanned.
 
-let args = CommandLine.arguments
-guard args.count >= 5 else {
-  FileHandle.standardError.write("usage: oncall-panel <timeout> <title> <where> <body> [option ...]\n".data(using: .utf8)!)
+var argv = Array(CommandLine.arguments.dropFirst())
+var qrText: String? = nil
+if argv.first == "--qr", argv.count >= 2 {
+  qrText = argv[1]
+  argv.removeFirst(2)
+}
+guard argv.count >= 4 else {
+  FileHandle.standardError.write(
+    "usage: oncall-panel [--qr <text>] <timeout> <title> <where> <body> [option ...]\n".data(using: .utf8)!)
   exit(2)
 }
-let timeout = max(1, Double(args[1]) ?? 60)
-let title = args[2]
-let location = args[3]
-let body = args[4]
-let options = Array(args.dropFirst(5))
+let timeout = max(1, Double(argv[0]) ?? 60)
+let title = argv[1]
+let location = argv[2]
+let body = argv[3]
+let options = Array(argv.dropFirst(4))
 
 func finish(_ result: String) -> Never {
   print(result)
@@ -88,13 +99,17 @@ let handler = Handler()
 
 let screen = targetScreen()
 
-let width: CGFloat = 540
+let width: CGFloat = qrText == nil ? 540 : 320
 let pad: CGFloat = 12
 let rowH: CGFloat = 28
 let rowGap: CGFloat = 4
 let margin: CGFloat = 16
 let labelWidth = width - 2 * pad
 let optionsH = CGFloat(options.count) * (rowH + rowGap)
+let fieldH: CGFloat = qrText == nil ? 4 + 26 : 0
+let qrSide: CGFloat = 220
+let qrBox: CGFloat = qrSide + 32
+let captionFont = NSFont.systemFont(ofSize: 12)
 
 // The location leads: with several panes in flight, which task this is matters
 // more than what state it is in. It can be long ("repo · worktree name
@@ -119,13 +134,29 @@ func textHeight(_ text: String, font: NSFont, width: CGFloat, maxLines: Int) -> 
 let locationH = textHeight(location, font: locationFont, width: labelWidth, maxLines: 2)
 let statusH = lineHeight(statusFont)
 
+// CoreImage draws the code one point per module. It is scaled by a whole
+// number with nearest-neighbour sampling, at twice the size for a Retina
+// backing, so every module stays a crisp square a phone camera can read.
+func qrImage(_ text: String, side: CGFloat) -> NSImage? {
+  guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+  filter.setValue(Data(text.utf8), forKey: "inputMessage")
+  filter.setValue("M", forKey: "inputCorrectionLevel")
+  guard let code = filter.outputImage, code.extent.width > 0 else { return nil }
+  let scale = max(1, floor(side / code.extent.width))
+  let pixels = code.samplingNearest().transformed(by: CGAffineTransform(scaleX: scale * 2, y: scale * 2))
+  guard let image = CIContext().createCGImage(pixels, from: pixels.extent) else { return nil }
+  return NSImage(cgImage: image, size: NSSize(width: code.extent.width * scale, height: code.extent.height * scale))
+}
+
 // Everything except the scrolling body.
-let chromeH = pad + locationH + 2 + statusH + 8 + 8 + optionsH + 4 + 26 + pad
+let chromeH = pad + locationH + 2 + statusH + 8 + 8 + optionsH + fieldH + pad
 // Size the body to what this screen can actually show — a taller panel would
-// be clipped, and the body scrolls anyway.
+// be clipped, and the body scrolls anyway. A QR panel's body is the code and
+// its caption, which do not scroll.
 let roomForBody = screen.visibleFrame.height - 2 * margin - 28 - chromeH
 let wantedLines = min(22, max(3, body.split(separator: "\n", omittingEmptySubsequences: false).count))
-let bodyH = max(48, min(CGFloat(wantedLines) * 15 + 8, roomForBody))
+let captionH = qrText == nil ? 0 : textHeight(body, font: captionFont, width: labelWidth, maxLines: 6)
+let bodyH = qrText == nil ? max(48, min(CGFloat(wantedLines) * 15 + 8, roomForBody)) : qrBox + 8 + captionH
 let height = chromeH + bodyH
 
 let panel = PanelWindow(
@@ -164,23 +195,45 @@ statusLabel.frame = NSRect(x: pad, y: y, width: labelWidth, height: statusH)
 content.addSubview(statusLabel)
 
 y -= (8 + bodyH)
-let scroll = NSScrollView(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: bodyH))
-let text = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
-text.isEditable = false
-text.isSelectable = true
-text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-text.textColor = .labelColor
-text.backgroundColor = .clear
-text.textContainerInset = NSSize(width: 4, height: 4)
-text.string = body
-text.autoresizingMask = [.width]
-scroll.documentView = text
-scroll.hasVerticalScroller = true
-scroll.drawsBackground = false
-scroll.borderType = .bezelBorder
-content.addSubview(scroll)
-// Stay at the top: the content that needs approving comes first, the options
-// are repeated as buttons below.
+if let qrText {
+  let box = NSView(frame: NSRect(x: (width - qrBox) / 2, y: y + bodyH - qrBox, width: qrBox, height: qrBox))
+  box.wantsLayer = true
+  box.layer?.backgroundColor = NSColor.white.cgColor
+  box.layer?.cornerRadius = 6
+  if let image = qrImage(qrText, side: qrSide) {
+    let view = NSImageView(frame: NSRect(
+      x: (qrBox - image.size.width) / 2, y: (qrBox - image.size.height) / 2,
+      width: image.size.width, height: image.size.height))
+    view.image = image
+    view.imageScaling = .scaleNone
+    box.addSubview(view)
+  }
+  content.addSubview(box)
+  let caption = NSTextField(wrappingLabelWithString: body)
+  caption.font = captionFont
+  caption.textColor = .labelColor
+  caption.alignment = .center
+  caption.frame = NSRect(x: pad, y: y, width: labelWidth, height: captionH)
+  content.addSubview(caption)
+} else {
+  let scroll = NSScrollView(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: bodyH))
+  let text = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
+  text.isEditable = false
+  text.isSelectable = true
+  text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+  text.textColor = .labelColor
+  text.backgroundColor = .clear
+  text.textContainerInset = NSSize(width: 4, height: 4)
+  text.string = body
+  text.autoresizingMask = [.width]
+  scroll.documentView = text
+  scroll.hasVerticalScroller = true
+  scroll.drawsBackground = false
+  scroll.borderType = .bezelBorder
+  content.addSubview(scroll)
+  // Stay at the top: the content that needs approving comes first, the options
+  // are repeated as buttons below.
+}
 
 y -= 8
 for (index, label) in options.enumerated() {
@@ -198,14 +251,18 @@ for (index, label) in options.enumerated() {
   y -= rowGap
 }
 
-y -= (4 + 26)
-let field = NSTextField(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: 26))
-field.placeholderString =
-  options.isEmpty ? "type an instruction, Enter to send" : "Enter = option 1, Cmd+N = option N, or type an answer"
-field.font = NSFont.systemFont(ofSize: 12)
-field.target = handler
-field.action = #selector(Handler.submitted(_:))
-content.addSubview(field)
+var field: NSTextField? = nil
+if qrText == nil {
+  y -= (4 + 26)
+  let input = NSTextField(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: 26))
+  input.placeholderString =
+    options.isEmpty ? "type an instruction, Enter to send" : "Enter = option 1, Cmd+N = option N, or type an answer"
+  input.font = NSFont.systemFont(ofSize: 12)
+  input.target = handler
+  input.action = #selector(Handler.submitted(_:))
+  content.addSubview(input)
+  field = input
+}
 
 // An input method follows the *active application*, not whichever window holds
 // the caret. As a `.nonactivatingPanel` that never activated, this field took
@@ -217,6 +274,8 @@ app.activate(ignoringOtherApps: true)
 panel.makeKeyAndOrderFront(nil)
 // Ordering front can still move a window on some macOS versions; re-assert.
 placeTopRight(panel, on: screen, margin: margin)
-panel.makeFirstResponder(field)
+if let field {
+  panel.makeFirstResponder(field)
+}
 DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish("timeout") }
 app.run()

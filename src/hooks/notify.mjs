@@ -17,17 +17,17 @@ import {
   markBlockedDelay,
   modeEnabled,
   nextDialog,
-  optionKeyboard,
   paneIdFrom,
   panelAvailable,
   readJsonEnv,
   readPaneScreen,
   readScreenSettled,
+  remoteChannels,
   resolveStatus,
   resolveWorktree,
   screenHasLiveDialog,
   screenHasOpenMenu,
-  sendTelegram,
+  sendRemote,
   shouldDebounce,
   shouldNotify,
   showPanel,
@@ -38,7 +38,7 @@ import {
   userAtPane,
 } from "../lib/index.mjs";
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
-import { ensurePoller } from "../inbound/poller.mjs";
+import { describeError, ensurePoller } from "../inbound/poller.mjs";
 
 loadDotEnv();
 ensurePoller();
@@ -46,13 +46,12 @@ if (!modeEnabled()) {
   process.exit(0);
 }
 
-const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
-const telegramReady = Boolean(token && chatId);
+// The paired channels CHANNEL selects; empty when none is paired.
+const channels = remoteChannels();
 const usePanel = panelAvailable();
 
-if (!telegramReady && !usePanel) {
-  console.error("missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+if (!channels.length && !usePanel) {
+  console.error("no remote channel paired (telegram or feishu) and no desktop panel");
   process.exit(0);
 }
 
@@ -257,8 +256,8 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
   return result.kind;
 }
 
-async function pingTelegram(screen) {
-  if (!telegramReady || shouldDebounce(paneId, status)) {
+async function pingRemote(screen) {
+  if (!channels.length || shouldDebounce(paneId, status)) {
     return;
   }
   const snippet = status === "blocked" ? blockedSnippet(screen) : isDone ? doneSnippet(screen) : "";
@@ -268,11 +267,15 @@ async function pingTelegram(screen) {
   const options = dialogChoices(screen, { hookAuthoritative: !dialogBacked });
   const fingerprint = dialogBacked ? dialogFingerprint(screen) : undefined;
   const text = formatMessage(context, event, status, snippet);
-  const messageId = await sendTelegram(token, chatId, text, {
-    forceReply: status !== "blocked" || options.length === 0,
-    replyMarkup: optionKeyboard(options),
-  });
-  rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options });
+  // Each channel on its own: one that is down must not cost the other its ping.
+  for (const channel of channels) {
+    try {
+      const messageId = await sendRemote(channel, text, { status, options });
+      rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options, channel, text });
+    } catch (error) {
+      console.error(`${channel} ping failed · ${where}: ${describeError(error)}`);
+    }
+  }
 }
 
 if (status === "blocked") {
@@ -284,14 +287,14 @@ if (status === "blocked") {
   }
 
   const delayMs = blockedDelayMs();
-  // The panel gets the same gate as the Telegram ping: no menu on screen means
+  // The panel gets the same gate as the chat ping: no menu on screen means
   // no buttons anywhere, only free text.
   const panelOptions = dialogChoices(screen, { hookAuthoritative });
   const fingerprint = hookAuthoritative ? undefined : dialogFingerprint(screen);
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
-    // time out and fall through to Telegram. If the user is (or arrives) at
-    // the pane, the rest of the wait runs silently and Telegram still follows.
+    // time out and fall through to the phone. If the user is (or arrives) at
+    // the pane, the rest of the wait runs silently and the ping still follows.
     if (shouldDebounce(paneId, "panel:blocked")) {
       process.exit(0);
     }
@@ -344,7 +347,7 @@ if (status === "blocked") {
     if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
       process.exit(0);
     }
-    await pingTelegram(later);
+    await pingRemote(later);
     process.exit(0);
   }
 
@@ -355,9 +358,9 @@ if (status === "blocked") {
     if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
       process.exit(0);
     }
-    await pingTelegram(later);
+    await pingRemote(later);
   } else {
-    await pingTelegram(screen);
+    await pingRemote(screen);
   }
   if (usePanel && !shouldDebounce(paneId, "panel:blocked")) {
     await runPanel({
@@ -378,7 +381,7 @@ if (status === "blocked") {
 const screen = isDone
   ? await readScreenSettled(readScreen, { sleep, ready: (text) => Boolean(doneSnippet(text)) })
   : readScreen();
-await pingTelegram(screen);
+await pingRemote(screen);
 if (usePanel && isDone && !shouldDebounce(paneId, "panel:done")) {
   await runPanel({ options: [], body: doneSnippet(screen) });
 }

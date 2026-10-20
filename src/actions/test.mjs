@@ -1,19 +1,21 @@
 import {
+  channelList,
+  feishuPaired,
   formatMessage,
   loadDotEnv,
   panelState,
+  remoteChannels,
   seedConfigEnv,
-  sendTelegram,
+  sendRemote,
   setupHints,
   showPanel,
 } from "../lib/index.mjs";
 
 loadDotEnv();
 
-const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
+const channels = remoteChannels();
 
-if (!token || !chatId) {
+if (!channels.length) {
   process.exit(await testPanel());
 }
 
@@ -27,20 +29,38 @@ const text = formatMessage(
   "blocked",
 );
 
-await sendTelegram(token, chatId, `test ping\n\n${text}`);
-console.log("sent test ping");
+let failed = 0;
+for (const channel of channels) {
+  try {
+    await sendRemote(channel, `test ping\n\n${text}`, { status: "test" });
+    console.log(`sent test ping · ${channel}`);
+  } catch (error) {
+    failed++;
+    console.error(`${channel} test ping failed: ${error?.message || error}`);
+  }
+}
+process.exit(failed ? 1 : 0);
 
-// Telegram is optional and the panel needs no setup, so with no chat paired the
-// test is the panel. Without this a user who only wanted the panel was told to
-// fill in a bot token, and had no way to see that the plugin already worked.
+// The phone channels are optional and the panel needs no setup, so with none
+// paired the test is the panel. Without this a user who only wanted the panel
+// was told to fill in a bot token, and had no way to see that the plugin
+// already worked.
 async function testPanel() {
   const panel = panelState();
   if (panel !== "ready") {
     const envPath = seedConfigEnv();
-    console.error(["nothing to test yet:", ...setupHints({ panel, token, chatId, envPath })].join("\n"));
+    const hints = setupHints({
+      panel,
+      token: process.env.TELEGRAM_BOT_TOKEN?.trim(),
+      chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
+      feishu: feishuPaired(),
+      channels: channelList(),
+      envPath,
+    });
+    console.error(["nothing to test yet:", ...hints].join("\n"));
     return 1;
   }
-  console.log("telegram not paired; opening a test panel");
+  console.log("no remote channel paired; opening a test panel");
   const result = await showPanel({
     title: "test · no pane",
     where: "Oncall test panel",

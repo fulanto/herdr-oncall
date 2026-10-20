@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { loadDotEnv, panelState, seedConfigEnv, setupHints } from "../lib/index.mjs";
+import { channelList, feishuPaired, loadDotEnv, panelState, seedConfigEnv, setupHints } from "../lib/index.mjs";
 import { restartPoller } from "../inbound/poller.mjs";
 
 const envPath = seedConfigEnv();
@@ -15,6 +15,8 @@ console.log(
     panel: panelState(),
     token: process.env.TELEGRAM_BOT_TOKEN?.trim(),
     chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
+    feishu: feishuPaired(),
+    channels: channelList(),
     envPath,
   }).join("\n"),
 );

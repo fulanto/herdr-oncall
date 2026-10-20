@@ -1,8 +1,8 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.5.13"
+version = "0.6.0"
 min_herdr_version = "0.7.0"
-description = "Host control plane: desktop panel and Telegram notify on blocked/done, reply into the pane."
+description = "Host control plane: desktop panel plus Telegram or Feishu pings on blocked/done, reply into the pane."
 # Every entry point is /bin/bash and the panel is macOS-only; there is no Windows path.
 platforms = ["linux", "macos"]
 
@@ -23,7 +23,7 @@ command = ["/bin/bash", "install.sh"]
 
 [[actions]]
 id = "poll"
-title = "Restart Telegram poller"
+title = "Restart reply poller"
 command = ["/bin/bash", "bin/run-node.sh", "src/actions/poll.mjs"]
 
 [[actions]]
@@ -45,6 +45,11 @@ command = ["/bin/bash", "bin/run-node.sh", "src/actions/toggle.mjs", "off"]
 id = "pair"
 title = "Pair Telegram chat"
 command = ["/bin/bash", "bin/run-node.sh", "src/actions/pair.mjs"]
+
+[[actions]]
+id = "pair-feishu"
+title = "Pair Feishu (scan QR)"
+command = ["/bin/bash", "bin/run-node.sh", "src/actions/pair-feishu.mjs"]
 
 [[actions]]
 id = "test"

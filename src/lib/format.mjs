@@ -798,13 +798,17 @@ export function formatMessage(context, event, status, snippet) {
   return composeMessage(statusTitle(context, event, status), formatWhere(context, event), status, snippet);
 }
 
+// The line a blocked ping ends with. A Feishu card swaps it for its own wording,
+// and drops it once a button has been pressed.
+export const BLOCKED_HINT = "tap a button, or type another answer";
+
 // The message once its title and location are known. The poller follows a form
 // without the event the hook was handed, so it builds each next ping from what
 // the first one recorded.
 export function composeMessage(head, where, status, snippet) {
   if (status === "blocked") {
     const body = snippet || "waiting for input";
-    return [head, where, "", body, "", "tap a button, or type another answer"].join("\n");
+    return [head, where, "", body, "", BLOCKED_HINT].join("\n");
   }
   if (status === "done" || status === "finish") {
     return [head, where, "", snippet || "finished"].join("\n");

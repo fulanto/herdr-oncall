@@ -110,6 +110,10 @@ export function rememberOutbound(record, now = Date.now()) {
     // checked against the dialog it was meant for.
     fingerprint: record.fingerprint,
     options: record.options,
+    channel: record.channel,
+    // Only a Feishu card is ever rebuilt after it was sent, to swap its buttons
+    // for what was pressed; nothing else needs the text kept around.
+    text: record.channel === "feishu" && record.options?.length ? record.text : undefined,
     at: now,
   };
   writeJson(path, store);
@@ -135,8 +139,13 @@ export function lastOutbound(now = Date.now()) {
 }
 
 export function resolveReplyTarget(message, now = Date.now()) {
-  const replyId = message?.reply_to_message?.message_id;
-  const hit = lookupOutbound(replyId, now);
+  return replyTarget(message?.reply_to_message?.message_id, now);
+}
+
+// `quotedId` is the ping a reply quoted, if it quoted one: Telegram's
+// reply_to_message, Feishu's parent_id.
+export function replyTarget(quotedId, now = Date.now()) {
+  const hit = lookupOutbound(quotedId, now);
   if (hit) {
     // This reply names the ping it answers, so it is about that ping's dialog.
     return { ...hit, explicit: true };
@@ -268,6 +277,26 @@ export function deliverReply(paneId, text, fallbackStatus, options = {}) {
   return prompted;
 }
 
+export const REPLY_HELP = "Blocked: tap a choice or type one. Done: send a new instruction.";
+export const NO_TARGET = "Reply to a ping so I know which pane.";
+
+// What the delivery path needs from a chat channel: `reply` for an ack, and
+// `ping` for a new question with its choices, returning the message id later
+// replies will name. Telegram's is built from `deps.send` so the tests can
+// record it; Feishu's lives in inbound/feishu.mjs.
+export function telegramChannel(deps = {}) {
+  const send = deps.send ?? sendTelegram;
+  return {
+    name: "telegram",
+    reply: (text) => send(deps.token, deps.chatId, text, { forceReply: false }),
+    ping: (text, { options = [] } = {}) =>
+      send(deps.token, deps.chatId, text, {
+        forceReply: options.length === 0,
+        replyMarkup: optionKeyboard(options),
+      }),
+  };
+}
+
 // `deps` carries the Telegram and herdr edges (`send`, `answer`, `run`) so the
 // whole path can be exercised without a network or a live pane; the poller
 // passes only the token and chat id and gets the real ones.
@@ -289,23 +318,19 @@ export async function handleTelegramUpdate(update, deps = {}) {
   if (!chatId || String(message.chat?.id) !== String(chatId)) {
     return { skipped: "chat" };
   }
+  const channel = telegramChannel(deps);
   if (!text || text.startsWith("/")) {
     if (text === "/start" || text.startsWith("/start@") || text === "/help") {
-      await send(
-        token,
-        chatId,
-        "Blocked: tap a choice or type one. Done: send a new instruction.",
-        { forceReply: false },
-      );
+      await channel.reply(REPLY_HELP);
     }
     return { skipped: "command" };
   }
   const target = resolveReplyTarget(message);
   if (!target?.paneId) {
-    await send(token, chatId, "Reply to a ping so I know which pane.", { forceReply: false });
+    await channel.reply(NO_TARGET);
     return { skipped: "no-target" };
   }
-  return finishDelivery(target, text, deps);
+  return finishDelivery(target, text, { ...deps, channel });
 }
 
 async function maybePair(message, text, token, send = sendTelegram) {
@@ -334,7 +359,6 @@ async function maybePair(message, text, token, send = sendTelegram) {
 
 async function handleCallback(query, deps) {
   const { token, chatId } = deps;
-  const send = deps.send ?? sendTelegram;
   const answer = deps.answer ?? telegramAnswerCallback;
   const chat = query?.message?.chat?.id ?? query?.from?.id;
   if (chat !== undefined && String(chat) !== String(chatId) && String(query?.from?.id) !== String(chatId)) {
@@ -345,6 +369,7 @@ async function handleCallback(query, deps) {
   if (!text) {
     return { skipped: "no-data" };
   }
+  const channel = telegramChannel(deps);
   // A tap always names its own message, so an id we do not know is not a reason
   // to fall back to the most recent ping and press a key into some other pane.
   const record = lookupOutbound(query?.message?.message_id);
@@ -352,15 +377,18 @@ async function handleCallback(query, deps) {
   console.log(`callback data=${text} pane=${target?.paneId || "none"}`);
   await answer(token, query.id, target?.paneId ? "sending" : "no pane");
   if (!target?.paneId) {
-    await send(token, chatId, "no pane mapped for that button", { forceReply: false });
+    await channel.reply("no pane mapped for that button");
     return { skipped: "no-target" };
   }
-  return finishDelivery(target, text, deps);
+  return finishDelivery(target, text, { ...deps, channel });
 }
 
-async function finishDelivery(target, text, deps) {
-  const { token, chatId } = deps;
-  const send = deps.send ?? sendTelegram;
+// Delivers a reply into its pane and acks it. `deps.channel` is where the ack
+// and any follow-on question go; `deps.ack` overrides only the ack, for a
+// channel that reports on the message tapped rather than with a new one.
+export async function finishDelivery(target, text, deps) {
+  const { channel } = deps;
+  const ack = deps.ack ?? channel.reply;
   // Which question this reply is about to answer, read before it lands, so the
   // one that replaces it can be told apart from it afterwards.
   const answered = target.status === "blocked" ? liveDialog(target.paneId, deps) : undefined;
@@ -369,15 +397,15 @@ async function finishDelivery(target, text, deps) {
     run: deps.run,
   });
   if (result?.stale) {
-    const ack = `stale · ${target.where || target.paneId} · dialog changed, not sent`;
-    await send(token, chatId, ack, { forceReply: false });
+    await ack(`stale · ${target.where || target.paneId} · dialog changed, not sent`);
     return { ok: false, stale: true, paneId: target.paneId };
   }
   const ok = !herdrFailed(result);
-  const ack = ok
-    ? `sent · ${target.where || target.paneId}`
-    : `failed · ${target.where || target.paneId}\n${herdrErrorText(result)}`;
-  await send(token, chatId, ack, { forceReply: false });
+  await ack(
+    ok
+      ? `sent · ${target.where || target.paneId}`
+      : `failed · ${target.where || target.paneId}\n${herdrErrorText(result)}`,
+  );
   const outcome = { ok, paneId: target.paneId, mode: classifyDelivery(target.status, text).mode };
   if (ok && answered && (await followForm(target, answered, deps))) {
     outcome.followed = true;
@@ -392,14 +420,14 @@ function liveDialog(paneId, deps) {
 
 // A multi-question form advances in place, tab by tab, and Herdr fires no event
 // for the next question. The desktop panel follows a form itself, from inside
-// the hook; a Telegram ping goes out as that hook exits, so answering the first
-// question from here left every later one sitting in the terminal with nobody
-// told. After a reply lands in a dialog, wait for the question that replaces it
-// and ping that one too, under the same heading, with its own buttons and
-// fingerprint. Returns whether a next question was pinged.
+// the hook; a chat ping goes out as that hook exits, so answering the first
+// question from the phone left every later one sitting in the terminal with
+// nobody told. After a reply lands in a dialog, wait for the question that
+// replaces it and ping that one too, on the channel the reply came from, under
+// the same heading, with its own buttons and fingerprint. Returns whether a
+// next question was pinged.
 async function followForm(target, answered, deps) {
-  const { token, chatId } = deps;
-  const send = deps.send ?? sendTelegram;
+  const { channel } = deps;
   const run = deps.run ?? runHerdr;
   const where = target.where || target.paneId;
   const next = await nextDialog({
@@ -415,10 +443,7 @@ async function followForm(target, answered, deps) {
   const options = dialogChoices(next.screen);
   const message = composeMessage(title, where, "blocked", blockedSnippet(next.screen));
   try {
-    const messageId = await send(token, chatId, message, {
-      forceReply: options.length === 0,
-      replyMarkup: optionKeyboard(options),
-    });
+    const messageId = await channel.ping(message, { options });
     rememberOutbound({
       messageId,
       paneId: target.paneId,
@@ -427,6 +452,8 @@ async function followForm(target, answered, deps) {
       title,
       fingerprint: next.fingerprint,
       options,
+      channel: channel.name,
+      text: message,
     });
   } catch (error) {
     // The answer itself went through and was acked; only the next question's

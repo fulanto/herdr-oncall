@@ -1,6 +1,8 @@
 import {
   OLD_PLUGIN_IDS,
   PLUGIN_ID,
+  channelList,
+  feishuPaired,
   loadDotEnv,
   panelState,
   pluginRoot,
@@ -42,6 +44,8 @@ console.log(
     panel: panelState(),
     token: process.env.TELEGRAM_BOT_TOKEN?.trim(),
     chatId: process.env.TELEGRAM_CHAT_ID?.trim(),
+    feishu: feishuPaired(),
+    channels: channelList(),
     envPath,
   }).join("\n"),
 );
