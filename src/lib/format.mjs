@@ -61,6 +61,17 @@ export function blockedSnippet(screen, limit = 24) {
   return capSnippet(renderBlock(slice));
 }
 
+// The question a dialog asks in words ("Do you want to proceed?"), or "" for
+// one that only draws its choices.
+export function dialogQuestion(screen) {
+  const lines = screenLines(screen);
+  const region = dialogRegion(lines);
+  if (!region || region.header === region.optionStart) {
+    return "";
+  }
+  return lines[region.header].trim();
+}
+
 // Is a dialog actually waiting on this screen, as opposed to one an agent
 // merely printed earlier in the transcript?
 //

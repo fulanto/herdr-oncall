@@ -17,6 +17,7 @@ import {
   screenHasLiveDialog,
   screenHasOpenMenu,
   sendTelegram,
+  sessionDialogBody,
   stateDir,
   statusTitle,
   telegramAnswerCallback,
@@ -441,7 +442,12 @@ async function followForm(target, answered, deps) {
   }
   const title = target.title || statusTitle({}, {}, "blocked");
   const options = dialogChoices(next.screen);
-  const message = composeMessage(title, where, "blocked", blockedSnippet(next.screen));
+  const message = composeMessage(
+    title,
+    where,
+    "blocked",
+    sessionDialogBody(target.paneId, next.screen, { run }) ?? blockedSnippet(next.screen),
+  );
   try {
     const messageId = await channel.ping(message, { options });
     rememberOutbound({

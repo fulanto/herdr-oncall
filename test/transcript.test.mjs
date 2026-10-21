@@ -6,16 +6,20 @@ import test from "node:test";
 import {
   capAnswer,
   claudeLastAnswer,
+  claudePendingCalls,
   claudeProcessSession,
   codexLastAnswer,
+  codexPendingCalls,
   ensureIntegrations,
   extractAgentSession,
   extractPanePids,
   missingIntegrations,
   paneAgentName,
   paneSession,
+  pendingDialog,
   readSessionTail,
   sessionAnswer,
+  sessionDialogBody,
   sessionFile,
 } from "../src/lib/index.mjs";
 
@@ -326,5 +330,144 @@ test("the Codex integration is installed for the user, unless they said not to",
       failed: [],
     });
     assert.deepEqual(untouched, [], "INSTALL_AGENT_INTEGRATION=0 means no herdr call at all");
+  });
+});
+
+// --- blocked: the dialog's subject from the session -------------------------
+
+const LONG_COMMAND = "rm -rf -- build/ && npm run build && npm run test:e2e -- --grep checkout --reporter=dot --retries=2 --workers=4";
+
+const bashUse = (id, command, description) => ({
+  type: "tool_use",
+  id,
+  name: "Bash",
+  input: { command, description },
+});
+
+// What Claude Code draws for that call: the command cut at the pane's width.
+const BASH_DIALOG = [
+  "⏺ Bash(rm -rf -- build/ && npm run build && npm run test:e2e -- --grep checkout…)",
+  "",
+  " Bash command",
+  "",
+  "   rm -rf -- build/ && npm run build && npm run test:e2e -- --grep checkout …",
+  "   Rebuild and run the checkout e2e suite",
+  "",
+  " Do you want to proceed?",
+  " ❯ 1. Yes",
+  "   2. Yes, and don't ask again for npm run commands in /repo",
+  "   3. No, and tell Claude what to do differently (esc)",
+].join("\n");
+
+test("Claude's open calls are the ones in this turn with no result yet", () => {
+  const prompt = claude.prompt("rebuild and test");
+  const calls = claudePendingCalls([
+    prompt,
+    claude.assistant([{ type: "text", text: "Rebuilding." }, bashUse("t1", "ls build"), bashUse("t2", LONG_COMMAND)], "tool_use"),
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
+  ]);
+  assert.deepEqual(calls.map((call) => call.input.command), [LONG_COMMAND]);
+  // An earlier turn's call is not this turn's, answered or not.
+  assert.deepEqual(claudePendingCalls([claude.assistant([bashUse("old", "rm -rf /tmp/x")], "tool_use"), prompt]), []);
+  assert.deepEqual(claudePendingCalls([prompt, claude.assistant([{ type: "text", text: "done" }], "end_turn")]), []);
+});
+
+test("Codex's open calls are this turn's calls with no output", () => {
+  const call = (id, name, args) => ({ type: "response_item", payload: { type: "function_call", name, call_id: id, arguments: JSON.stringify(args) } });
+  const output = (id) => ({ type: "response_item", payload: { type: "function_call_output", call_id: id, output: "ok" } });
+  const records = [
+    codex.started,
+    call("c1", "exec_command", { cmd: "ls" }),
+    output("c1"),
+    call("c2", "exec_command", { cmd: "git push --force", workdir: "/repo", justification: "Publish the fix" }),
+  ];
+  assert.deepEqual(codexPendingCalls(records), [
+    { name: "exec_command", input: { cmd: "git push --force", workdir: "/repo", justification: "Publish the fix" } },
+  ]);
+  assert.deepEqual(codexPendingCalls([...records, output("c2"), codex.complete("pushed")]), []);
+});
+
+test("the dialog's body is the whole call, and only the call that is on screen", () => {
+  const records = [
+    claude.prompt("go"),
+    claude.assistant([bashUse("t1", "git status"), bashUse("t2", LONG_COMMAND, "Rebuild and run the checkout e2e suite")], "tool_use"),
+  ];
+  const found = pendingDialog("claude", records, BASH_DIALOG);
+  assert.equal(found.text, `Bash · Rebuild and run the checkout e2e suite\n${LONG_COMMAND}`, "the command the screen cut short, whole");
+  // Neither open call is what this dialog asks about: nothing from the session.
+  const other = BASH_DIALOG.replaceAll("rm -rf -- build/ && npm run build && npm run test:e2e -- --grep checkout", "curl -X DELETE https://api");
+  assert.equal(pendingDialog("claude", records, other), undefined);
+});
+
+test("a form's body is the question on screen, with every option's description", () => {
+  const ask = {
+    type: "tool_use",
+    id: "q1",
+    name: "AskUserQuestion",
+    input: {
+      questions: [
+        { question: "Where should the result card go?", options: [{ label: "Inline", description: "In the thread" }, { label: "Pinned" }] },
+        {
+          question: "What should happen to the re-send button?",
+          options: [
+            { label: "Drop it", description: "A failed send gets a per-message retry instead, so the hover button has nothing left to do" },
+            { label: "Keep it" },
+          ],
+        },
+      ],
+    },
+  };
+  const records = [claude.prompt("design it"), claude.assistant([ask], "tool_use")];
+  // The form's second tab is the one up now.
+  const screen = [
+    "←  ☒ Result card  ☐ Resend  ✔ Submit  →",
+    "",
+    "What should happen to the re-send button?",
+    "",
+    "❯ 1. Drop it",
+    "     A failed send gets a per-message retry instead, so the hover button",
+    "  2. Keep it",
+    "",
+    "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+  ].join("\n");
+  const found = pendingDialog("claude", records, screen);
+  assert.equal(
+    found.text,
+    "What should happen to the re-send button?\n\n1. Drop it — A failed send gets a per-message retry instead, so the hover button has nothing left to do\n2. Keep it",
+  );
+});
+
+test("Codex's code-mode exec is left to the screen; its plain calls are not", () => {
+  const custom = { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "x1", input: 'text(await tools.exec_command({cmd:"git push --force"}))' } };
+  const screen = "Would you like to run the following command?\n\n  $ git push --force\n\n› 1. Yes, proceed (y)\n  2. No (esc)";
+  assert.equal(pendingDialog("codex", [codex.started, custom], screen), undefined);
+
+  const plain = {
+    type: "response_item",
+    payload: { type: "function_call", name: "exec_command", call_id: "x2", arguments: JSON.stringify({ cmd: "git push --force", workdir: "/repo" }) },
+  };
+  assert.equal(pendingDialog("codex", [codex.started, plain], screen).text, "Run\ngit push --force\nin /repo");
+});
+
+test("a blocked body is read from the pane's session, with the screen's question under it", async () => {
+  await withHome(async (home) => {
+    mkdirSync(join(home, "sessions"));
+    mkdirSync(join(home, "projects", "-repo"), { recursive: true });
+    writeFileSync(join(home, "sessions", "44426.json"), JSON.stringify({ sessionId: "s-2", kind: "interactive" }));
+    writeFileSync(
+      join(home, "projects", "-repo", "s-2.jsonl"),
+      jsonl([claude.prompt("go"), claude.assistant([bashUse("t1", LONG_COMMAND, "Rebuild and run the checkout e2e suite")], "tool_use")]),
+    );
+    const run = (args) =>
+      args[1] === "process-info"
+        ? { status: 0, stdout: JSON.stringify(PROCESS_INFO) }
+        : { status: 0, stdout: JSON.stringify({ result: { agent: { agent: "claude" } } }) };
+    const env = { CLAUDE_CONFIG_DIR: home };
+    assert.equal(
+      sessionDialogBody("wN:p1", BASH_DIALOG, { run, env }),
+      `Bash · Rebuild and run the checkout e2e suite\n${LONG_COMMAND}\n\nDo you want to proceed?`,
+    );
+    // A pane whose session cannot be found leaves it to the screen.
+    assert.equal(sessionDialogBody("wN:p1", BASH_DIALOG, { run: () => ({ status: 1 }), env }), undefined);
   });
 });

@@ -1,7 +1,8 @@
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { envFlag } from "./config.mjs";
+import { dialogQuestion } from "./format.mjs";
 import { runHerdr, sleep } from "./paths.mjs";
 
 // A done ping carries the agent's last answer, and the agent's own session
@@ -377,4 +378,256 @@ export async function sessionAnswer(
     }
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Blocked: what the dialog is about.
+//
+// A permission dialog is about a tool call the agent has already made: the
+// call is written to the session the moment the model emits it, and its result
+// only once the user has answered (a Claude Bash call approved from Feishu was
+// recorded at 03:11:41 and answered at 03:13:00). So the open call is the
+// dialog's subject, verbatim — the whole command rather than what fit on the
+// screen. The screen still decides everything that is pressed: whether a
+// dialog is up, its choices, the fingerprint. And the text is only used when a
+// piece of the call is actually on screen, since a turn can have several calls
+// open and the dialog asks about one of them.
+
+// Claude Code: the tool calls in the current turn with no tool_result yet. A
+// turn that ended (`end_turn` last) has none; a user prompt is where the turn
+// began.
+export function claudePendingCalls(records) {
+  const chat = records.filter(
+    (record) => (record.type === "assistant" || record.type === "user") && !record.isSidechain,
+  );
+  const last = chat.at(-1);
+  if (last?.type === "assistant" && last.message?.stop_reason === "end_turn") {
+    return [];
+  }
+  const answered = new Set();
+  const calls = [];
+  for (let i = chat.length - 1; i >= 0; i--) {
+    const blocks = Array.isArray(chat[i].message?.content) ? chat[i].message.content : [];
+    if (chat[i].type === "user") {
+      const results = blocks.filter((block) => block?.type === "tool_result");
+      if (!results.length) {
+        break;
+      }
+      for (const block of results) {
+        answered.add(block.tool_use_id);
+      }
+      continue;
+    }
+    const open = blocks.filter((block) => block?.type === "tool_use" && !answered.has(block.id));
+    calls.unshift(...open.map((block) => ({ name: block.name, input: block.input ?? {} })));
+  }
+  return calls;
+}
+
+// Codex: the calls since the turn started (`task_started`) with no output
+// carrying their call_id. A `task_complete` after the last start means the
+// turn is over and nothing is open.
+export function codexPendingCalls(records) {
+  const answered = new Set();
+  const calls = [];
+  for (let i = records.length - 1; i >= 0; i--) {
+    const { type } = records[i] ?? {};
+    const payload = records[i]?.payload ?? {};
+    if (type === "event_msg" && payload.type === "task_complete") {
+      return [];
+    }
+    if (type === "event_msg" && payload.type === "task_started") {
+      break;
+    }
+    if (type !== "response_item") {
+      continue;
+    }
+    if (/_output$/.test(payload.type ?? "") && payload.call_id) {
+      answered.add(payload.call_id);
+    } else if ((payload.type === "function_call" || payload.type === "custom_tool_call") && !answered.has(payload.call_id)) {
+      let input = {};
+      if (payload.type === "function_call") {
+        try {
+          input = JSON.parse(payload.arguments);
+        } catch {
+          input = {};
+        }
+      } else {
+        input = { text: String(payload.input ?? "") };
+      }
+      calls.unshift({ name: payload.name, input });
+    }
+  }
+  return calls;
+}
+
+const SHOWN_LINES = 12;
+
+function firstLines(text, count = SHOWN_LINES) {
+  const lines = String(text ?? "").replace(/\s+$/, "").split("\n");
+  return lines.length <= count ? lines.join("\n") : `${lines.slice(0, count).join("\n")}\n… (${lines.length - count} more lines)`;
+}
+
+function firstLine(text) {
+  return String(text ?? "").trim().split("\n")[0];
+}
+
+function prefixed(text, mark) {
+  return firstLines(text)
+    .split("\n")
+    .map((line) => `${mark} ${line}`)
+    .join("\n");
+}
+
+function heading(name, detail) {
+  return detail ? `${name} · ${detail}` : name;
+}
+
+function commandText(value) {
+  return Array.isArray(value) ? value.join(" ") : String(value ?? "");
+}
+
+// One open call as the person approving it should read it, each with the
+// piece of it (`witness`) that must be on screen for the dialog to be about
+// it. A call that asks several questions gives one candidate per question. A
+// call with nothing worth showing gives none, and the screen is used instead —
+// Codex's code-mode `exec` among them: its input is code that calls a shell,
+// and the command being approved is somewhere inside it.
+export function describeCall(agent, call) {
+  const input = call?.input ?? {};
+  const name = String(call?.name ?? "");
+  if (agent === "claude") {
+    switch (name) {
+      case "Bash":
+        return [{ text: `${heading("Bash", input.description)}\n${firstLines(input.command)}`, witness: firstLine(input.command) }];
+      case "Edit":
+        return [
+          {
+            text: `${heading("Edit", input.file_path)}\n${prefixed(input.old_string, "-")}\n${prefixed(input.new_string, "+")}`,
+            witness: basename(String(input.file_path ?? "")),
+          },
+        ];
+      case "MultiEdit":
+        return [
+          {
+            text: [
+              heading("Edit", input.file_path),
+              ...(input.edits ?? []).map((edit) => `${prefixed(edit.old_string, "-")}\n${prefixed(edit.new_string, "+")}`),
+            ].join("\n"),
+            witness: basename(String(input.file_path ?? "")),
+          },
+        ];
+      case "Write":
+        return [{ text: `${heading("Write", input.file_path)}\n${firstLines(input.content)}`, witness: basename(String(input.file_path ?? "")) }];
+      case "NotebookEdit":
+        return [
+          { text: `${heading("NotebookEdit", input.notebook_path)}\n${firstLines(input.new_source)}`, witness: basename(String(input.notebook_path ?? "")) },
+        ];
+      case "Read":
+        return [{ text: heading("Read", input.file_path), witness: basename(String(input.file_path ?? "")) }];
+      case "WebFetch": {
+        let host = "";
+        try {
+          host = new URL(input.url).host;
+        } catch {
+          host = String(input.url ?? "");
+        }
+        return [{ text: [heading("WebFetch", input.url), input.prompt].filter(Boolean).join("\n"), witness: host }];
+      }
+      case "WebSearch":
+        return [{ text: heading("WebSearch", input.query), witness: input.query }];
+      case "AskUserQuestion":
+        return (input.questions ?? []).map((question) => ({
+          text: [
+            question.question,
+            "",
+            ...(question.options ?? []).map(
+              (option, index) => `${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`,
+            ),
+          ].join("\n"),
+          witness: question.question,
+          asks: true,
+        }));
+      case "ExitPlanMode":
+        return [{ text: `Plan\n${firstLines(input.plan, 40)}`, witness: String(input.plan ?? "").split("\n").find((line) => line.trim()) }];
+      default:
+        // MCP and other tools: the name says what it is, the input what it does.
+        return [
+          {
+            text: `${name}\n${firstLines(JSON.stringify(input, null, 2))}`,
+            witness: name.split("__").at(-1),
+          },
+        ];
+    }
+  }
+  if (agent === "codex") {
+    if (["exec_command", "shell", "local_shell", "container.exec"].includes(name)) {
+      const command = commandText(input.cmd ?? input.command);
+      return [
+        {
+          text: [heading("Run", input.justification), firstLines(command), input.workdir ? `in ${input.workdir}` : ""]
+            .filter(Boolean)
+            .join("\n"),
+          witness: firstLine(command),
+        },
+      ];
+    }
+    if (name === "apply_patch") {
+      const patch = String(input.text ?? input.input ?? "");
+      const file = patch.match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/m)?.[1] ?? "";
+      return [{ text: `Patch\n${firstLines(patch, 30)}`, witness: basename(file.trim()) }];
+    }
+    if (name === "request_user_input_async") {
+      return (input.questions ?? []).map((question) => ({
+        text: [question.title, "", ...(question.options ?? []).map((option, index) => `${index + 1}. ${option}`)].join("\n"),
+        witness: question.title,
+        asks: true,
+      }));
+    }
+  }
+  return [];
+}
+
+// Text compared with every space, line break and Markdown mark removed: the
+// terminal wraps a long command wherever the width runs out, and renders
+// headings and emphasis without their marks.
+function squash(text) {
+  return String(text ?? "")
+    .replace(/[\s`*_#>…]+/g, "")
+    .toLowerCase();
+}
+
+// The open call this screen's dialog is about, described, or undefined.
+// A witness has to be long enough to mean something; only its start is
+// compared, since the screen may cut a long line short.
+export function pendingDialog(agent, records, screen) {
+  const calls = agent === "claude" ? claudePendingCalls(records) : agent === "codex" ? codexPendingCalls(records) : [];
+  const onScreen = squash(screen);
+  for (const call of calls) {
+    for (const candidate of describeCall(agent, call)) {
+      const witness = squash(candidate.witness).slice(0, 40);
+      if (witness.length >= 4 && onScreen.includes(witness)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
+// The body of a blocked ping from the pane's session: the call the dialog is
+// about, then the question the dialog asks in words. Undefined when the
+// session cannot be found or none of its open calls is the one on screen —
+// the caller then reads the body off the screen as before.
+export function sessionDialogBody(paneId, screen, { run = runHerdr, env = process.env } = {}) {
+  const session = paneSession(paneId, { run, env });
+  const path = sessionFile(session, env);
+  if (!path) {
+    return undefined;
+  }
+  const found = pendingDialog(session.agent, readSessionTail(path), screen);
+  if (!found) {
+    return undefined;
+  }
+  const question = found.asks ? "" : dialogQuestion(screen);
+  return capAnswer(question ? `${found.text}\n\n${question}` : found.text);
 }

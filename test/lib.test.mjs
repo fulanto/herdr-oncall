@@ -12,6 +12,7 @@ import {
   decideBlockedReal,
   dialogChoices,
   dialogFingerprint,
+  dialogQuestion,
   doneSnippet,
   extractAgentStatus,
   extractDetectionSkipped,
@@ -608,6 +609,15 @@ $ rm -rf -- /tmp/draft
   const text = blockedSnippet(screen);
   assert.match(text, /^Would you like to run/);
   assert.doesNotMatch(text, /assistant output above/);
+});
+
+test("dialogQuestion is the question asked in words, or nothing", () => {
+  assert.equal(
+    dialogQuestion("⏺ Bash(ls)\n\n  Do you want to proceed?\n  ❯ 1. Yes\n    2. No\n\n  Esc to cancel"),
+    "Do you want to proceed?",
+  );
+  assert.equal(dialogQuestion("Pick one:\n❯ 1. Red\n  2. Blue"), "");
+  assert.equal(dialogQuestion("just text"), "");
 });
 
 test("only a real keystroke in parentheses becomes a send key", () => {

@@ -32,6 +32,7 @@ import {
   screenHasOpenMenu,
   sendRemote,
   sessionAnswer,
+  sessionDialogBody,
   shouldDebounce,
   shouldNotify,
   showPanel,
@@ -176,6 +177,22 @@ function blockedSkipReason(screen) {
     : "blocked but pane screen empty";
 }
 
+// What a blocked dialog is about. The agent's session has the call verbatim —
+// the whole command, not what fit on the screen — and is used when one of its
+// open calls is the one on screen; otherwise the body is read off the screen.
+// The choices, the keys and the fingerprint always come from the screen,
+// since that is what a reply presses. One session read per distinct screen:
+// the panel re-renders the same one while it follows a form.
+let bodyMemo;
+function blockedBody(screen) {
+  if (bodyMemo?.screen !== screen) {
+    const fromSession = sessionDialogBody(paneId, screen);
+    bodyMemo = { screen, body: fromSession ?? blockedSnippet(screen), source: fromSession ? "session" : "screen" };
+    console.log(`blocked · ${where} · body from ${bodyMemo.source}`);
+  }
+  return bodyMemo.body;
+}
+
 function deliverFromPanel(text, fingerprint) {
   const result = deliverReply(paneId, text, status, { fingerprint });
   if (herdrFailed(result)) {
@@ -264,7 +281,7 @@ async function pingRemote(screen, doneBody) {
   if (!channels.length || shouldDebounce(paneId, status)) {
     return;
   }
-  const snippet = status === "blocked" ? blockedSnippet(screen) : isDone ? (doneBody ?? doneSnippet(screen)) : "";
+  const snippet = status === "blocked" ? blockedBody(screen) : isDone ? (doneBody ?? doneSnippet(screen)) : "";
   // A hook-authoritative block has no menu on screen: nothing to put on buttons
   // and nothing to fingerprint, so the reply comes back as free text.
   const dialogBacked = status === "blocked" && !hookAuthoritative;
@@ -312,7 +329,7 @@ if (status === "blocked") {
     for (let answered = 0; ; answered++) {
       outcome = await runPanel({
         options: live.options,
-        body: blockedSnippet(live.screen),
+        body: blockedBody(live.screen),
         timeoutMs: delayMs,
         fingerprint: live.fingerprint,
       });
@@ -369,7 +386,7 @@ if (status === "blocked") {
   if (usePanel && !shouldDebounce(paneId, "panel:blocked")) {
     await runPanel({
       options: panelOptions,
-      body: blockedSnippet(screen),
+      body: blockedBody(screen),
       fingerprint,
     });
   }
