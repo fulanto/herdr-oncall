@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { PLUGIN_ID, managedStateDir, stateDir } from "../src/lib/index.mjs";
+import { PLUGIN_ID, managedStateDir, saveScreen, stateDir } from "../src/lib/index.mjs";
 
 // Every case here decides where state lands, so each one owns the three env
 // vars that answer that question and hands them back untouched.
@@ -86,4 +86,29 @@ test("HOME stands in for an unset XDG_STATE_HOME", () => {
     mkdirSync(managed, { recursive: true });
     assert.equal(stateDir(), managed);
   });
+});
+
+test("a screen read instead of a session is kept whole for a fixture, and never throws", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oncall-screen-"));
+  const previous = process.env.HERDR_PLUGIN_STATE_DIR;
+  try {
+    process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "state");
+    const screen = "─────\n Bash command\n╌╌╌╌╌\n │ grep -n x\n╌╌╌╌╌\n Do you want to proceed?\n ❯ 1. Yes\n";
+    saveScreen("last-blocked-screen.txt", screen);
+    assert.equal(readFileSync(join(dir, "state", "last-blocked-screen.txt"), "utf8"), screen);
+    saveScreen("last-blocked-screen.txt", "newer");
+    assert.equal(readFileSync(join(dir, "state", "last-blocked-screen.txt"), "utf8"), "newer", "the last one wins");
+
+    // A state dir that cannot be created: the ping goes on without the capture.
+    writeFileSync(join(dir, "file"), "");
+    process.env.HERDR_PLUGIN_STATE_DIR = join(dir, "file", "state");
+    assert.doesNotThrow(() => saveScreen("last-done-screen.txt", "x"));
+  } finally {
+    if (previous === undefined) {
+      delete process.env.HERDR_PLUGIN_STATE_DIR;
+    } else {
+      process.env.HERDR_PLUGIN_STATE_DIR = previous;
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

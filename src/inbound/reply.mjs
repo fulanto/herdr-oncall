@@ -14,6 +14,7 @@ import {
   pendingPair,
   readPaneScreen,
   runHerdr,
+  saveScreen,
   screenHasLiveDialog,
   screenHasOpenMenu,
   sendTelegram,
@@ -442,12 +443,12 @@ async function followForm(target, answered, deps) {
   }
   const title = target.title || statusTitle({}, {}, "blocked");
   const options = dialogChoices(next.screen);
-  const message = composeMessage(
-    title,
-    where,
-    "blocked",
-    sessionDialogBody(target.paneId, next.screen, { run }) ?? blockedSnippet(next.screen),
-  );
+  let body = sessionDialogBody(target.paneId, next.screen, { run });
+  if (!body) {
+    saveScreen("last-blocked-screen.txt", next.screen);
+    body = blockedSnippet(next.screen);
+  }
+  const message = composeMessage(title, where, "blocked", body);
   try {
     const messageId = await channel.ping(message, { options });
     rememberOutbound({

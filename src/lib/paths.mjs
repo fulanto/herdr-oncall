@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,4 +87,18 @@ export function stateDir() {
 
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A screen Oncall had to read instead of the agent's own record, kept whole in
+// the state dir under `name`, one file per kind, overwritten each time. A shape
+// the parser gets wrong then becomes a test fixture rather than a screenshot
+// and a description: the last dialog that lost its command went unfixed for
+// want of exactly this. A missing state dir must not turn a ping into a crash.
+export function saveScreen(name, screen) {
+  try {
+    mkdirSync(stateDir(), { recursive: true });
+    writeFileSync(join(stateDir(), name), String(screen ?? ""), "utf8");
+  } catch {
+    /* best effort */
+  }
 }

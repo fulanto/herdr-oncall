@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -611,6 +611,9 @@ test("answering a form's question from telegram pings the next one", async () =>
     assert.equal(record.status, "blocked");
     assert.equal(record.title, "blocked · Claude");
     assert.equal(record.fingerprint, dialogFingerprint(TAB_TWO));
+    // No session to read the question from here, so it came off the screen,
+    // and that screen is kept for a fixture.
+    assert.equal(readFileSync(join(process.env.HERDR_PLUGIN_STATE_DIR, "last-blocked-screen.txt"), "utf8"), TAB_TWO);
   });
 });
 

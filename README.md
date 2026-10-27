@@ -159,7 +159,7 @@ src/actions/          setup, pair, pair-feishu, test, toggle, poll
 test/
 ```
 
-Dialog shapes vary between agents and versions. When one doesn't parse cleanly, capture the real screen with `herdr pane read <pane> --source visible --format text` and open an issue with it — that's exactly what the test fixtures are made of.
+Dialog shapes vary between agents and versions. When a ping comes out wrong, the screen it was read from is usually already saved: `last-blocked-screen.txt`, `last-done-screen.txt` or `last-skipped-screen.txt` in the plugin's state dir (`~/.local/state/herdr/plugins/com.codreamer.herdr.oncall/`). Open an issue with that file — that's exactly what the test fixtures are made of. While a dialog is still up, `herdr pane read <pane> --source visible --format text` captures it too.
 
 Derived from [`ogulcancelik/herdr-plugin-examples/agent-telegram-notify`](https://github.com/ogulcancelik/herdr-plugin-examples/tree/main/agent-telegram-notify).
 

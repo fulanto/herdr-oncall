@@ -1,5 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   agentDetectionSkipped,
   blockedDelayMs,
@@ -28,6 +26,7 @@ import {
   remoteChannels,
   resolveStatus,
   resolveWorktree,
+  saveScreen,
   screenHasLiveDialog,
   screenHasOpenMenu,
   sendRemote,
@@ -37,7 +36,6 @@ import {
   shouldNotify,
   showPanel,
   sleep,
-  stateDir,
   statusTitle,
   stillBlocked,
   userAtPane,
@@ -160,12 +158,7 @@ function skipTrace(screen) {
     .filter(Boolean)
     .slice(-8)
     .map((line) => (line.length > 120 ? `${line.slice(0, 120)}…` : line));
-  try {
-    mkdirSync(stateDir(), { recursive: true });
-    writeFileSync(join(stateDir(), "last-skipped-screen.txt"), String(screen ?? ""), "utf8");
-  } catch {
-    // A missing state dir must not turn a skip into a crash.
-  }
+  saveScreen("last-skipped-screen.txt", screen);
   return `tail: ${lines.join(" | ") || "(empty screen)"}`;
 }
 
@@ -188,6 +181,9 @@ function blockedBody(screen) {
   if (bodyMemo?.screen !== screen) {
     const fromSession = sessionDialogBody(paneId, screen);
     bodyMemo = { screen, body: fromSession ?? blockedSnippet(screen), source: fromSession ? "session" : "screen" };
+    if (!fromSession) {
+      saveScreen("last-blocked-screen.txt", screen);
+    }
     console.log(`blocked · ${where} · body from ${bodyMemo.source}`);
   }
   return bodyMemo.body;
@@ -424,6 +420,7 @@ if (isDone) {
     }
     screen = await readScreenSettled(readScreen, { sleep, ready: (text) => Boolean(doneSnippet(text)) });
     doneBody = doneSnippet(screen);
+    saveScreen("last-done-screen.txt", screen);
   }
   console.log(`done · ${where} · answer from ${source}`);
 } else {

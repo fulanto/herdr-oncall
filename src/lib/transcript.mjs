@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { envFlag } from "./config.mjs";
@@ -395,10 +395,12 @@ export async function sessionAnswer(
 
 // Claude Code: the tool calls in the current turn with no tool_result yet. A
 // turn that ended (`end_turn` last) has none; a user prompt is where the turn
-// began.
-export function claudePendingCalls(records) {
+// began. In the main transcript a subagent's records (`isSidechain`) are not
+// the turn; a subagent's own transcript is nothing but them, so `sidechain`
+// keeps them.
+export function claudePendingCalls(records, { sidechain = false } = {}) {
   const chat = records.filter(
-    (record) => (record.type === "assistant" || record.type === "user") && !record.isSidechain,
+    (record) => (record.type === "assistant" || record.type === "user") && (sidechain || !record.isSidechain),
   );
   const last = chat.at(-1);
   if (last?.type === "assistant" && last.message?.stop_reason === "end_turn") {
@@ -551,13 +553,13 @@ export function describeCall(agent, call) {
       case "ExitPlanMode":
         return [{ text: `Plan\n${firstLines(input.plan, 40)}`, witness: String(input.plan ?? "").split("\n").find((line) => line.trim()) }];
       default:
-        // MCP and other tools: the name says what it is, the input what it does.
-        return [
-          {
-            text: `${name}\n${firstLines(JSON.stringify(input, null, 2))}`,
-            witness: name.split("__").at(-1),
-          },
-        ];
+        // An MCP tool: its name says what it is, its input what it does. Any
+        // other tool is not shown: a bare name is too weak a witness — the
+        // `Agent` call that started a subagent stays open while it runs, and
+        // "agent" is on the screen of every dialog that subagent raises.
+        return name.startsWith("mcp__")
+          ? [{ text: `${name}\n${firstLines(JSON.stringify(input, null, 2))}`, witness: name.split("__").at(-1) }]
+          : [];
     }
   }
   if (agent === "codex") {
@@ -588,30 +590,59 @@ export function describeCall(agent, call) {
   return [];
 }
 
-// Text compared with every space, line break and Markdown mark removed: the
-// terminal wraps a long command wherever the width runs out, and renders
-// headings and emphasis without their marks.
+// Text compared with every space, line break, Markdown mark and box-drawing
+// character removed: the terminal wraps a long command wherever the width
+// runs out, Claude Code draws a `│` gutter down a quoted command, and headings
+// and emphasis render without their marks.
 function squash(text) {
   return String(text ?? "")
-    .replace(/[\s`*_#>…]+/g, "")
+    .replace(/[\s`*_#>…─-╿]+/g, "")
     .toLowerCase();
 }
 
 // The open call this screen's dialog is about, described, or undefined.
 // A witness has to be long enough to mean something; only its start is
-// compared, since the screen may cut a long line short.
-export function pendingDialog(agent, records, screen) {
-  const calls = agent === "claude" ? claudePendingCalls(records) : agent === "codex" ? codexPendingCalls(records) : [];
+// compared, since the screen may cut a long line short. `by` names the
+// subagent whose transcript `records` is, as the dialog itself does ("Bash
+// command · from the code-writer agent").
+export function pendingDialog(agent, records, screen, { by, sidechain = false } = {}) {
+  const calls =
+    agent === "claude" ? claudePendingCalls(records, { sidechain }) : agent === "codex" ? codexPendingCalls(records) : [];
   const onScreen = squash(screen);
   for (const call of calls) {
     for (const candidate of describeCall(agent, call)) {
       const witness = squash(candidate.witness).slice(0, 40);
       if (witness.length >= 4 && onScreen.includes(witness)) {
-        return candidate;
+        return by ? { ...candidate, text: candidate.text.replace(/^[^\n]*/, (head) => `${head} · from the ${by} agent`) } : candidate;
       }
     }
   }
   return undefined;
+}
+
+// A subagent's calls are not in the session's transcript but in its own,
+// `<session>/subagents/agent-<id>.jsonl`, named by the `.meta.json` beside it.
+// A dialog a subagent raises is about a call it just made, so only the most
+// recently written few are read, and only their ends.
+const SUBAGENT_FILES = 8;
+const SUBAGENT_TAIL_BYTES = 1024 * 1024;
+
+export function claudeSubagentFiles(sessionPath, limit = SUBAGENT_FILES) {
+  const dir = join(String(sessionPath).replace(/\.jsonl$/, ""), "subagents");
+  return listDir(dir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => {
+      const path = join(dir, name);
+      let mtime = 0;
+      try {
+        mtime = statSync(path).mtimeMs;
+      } catch {
+        mtime = 0;
+      }
+      return { path, mtime, agentType: readJsonFile(path.replace(/\.jsonl$/, ".meta.json"))?.agentType };
+    })
+    .sort((a, b) => b.mtime - a.mtime)
+    .slice(0, limit);
 }
 
 // The body of a blocked ping from the pane's session: the call the dialog is
@@ -624,7 +655,18 @@ export function sessionDialogBody(paneId, screen, { run = runHerdr, env = proces
   if (!path) {
     return undefined;
   }
-  const found = pendingDialog(session.agent, readSessionTail(path), screen);
+  let found = pendingDialog(session.agent, readSessionTail(path), screen);
+  if (!found && session.agent === "claude") {
+    for (const subagent of claudeSubagentFiles(path)) {
+      found = pendingDialog("claude", readSessionTail(subagent.path, SUBAGENT_TAIL_BYTES), screen, {
+        by: subagent.agentType || "sub",
+        sidechain: true,
+      });
+      if (found) {
+        break;
+      }
+    }
+  }
   if (!found) {
     return undefined;
   }

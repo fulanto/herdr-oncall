@@ -8,6 +8,7 @@ import {
   claudeLastAnswer,
   claudePendingCalls,
   claudeProcessSession,
+  claudeSubagentFiles,
   codexLastAnswer,
   codexPendingCalls,
   ensureIntegrations,
@@ -470,4 +471,80 @@ test("a blocked body is read from the pane's session, with the screen's question
     // A pane whose session cannot be found leaves it to the screen.
     assert.equal(sessionDialogBody("wN:p1", BASH_DIALOG, { run: () => ({ status: 1 }), env }), undefined);
   });
+});
+
+// Reconstructed from a screenshot of a dialog a background subagent raised
+// (names and paths changed). Its ping carried only the part below the second
+// dashed rule — no command — because the subagent's calls live in their own
+// transcript and the session's was the only one read.
+const GREP = String.raw`grep -n "^import.*@/i18n\|^import i18n\|^import appI18n" 'src/routes/skills.create.$type.tsx' src/routes/skills.index.tsx; grep -n "formatQuotaExhausted" 'src/routes/skills.create.$type.tsx' | head -3`;
+const SUBAGENT_DIALOG = [
+  "─".repeat(100),
+  " Bash command · from the code-writer agent                                                      2 of 3",
+  ' Tip: auto mode handles these prompts for you — choose "switch to auto mode" below',
+  " Check i18n imports in skills routes",
+  "╌".repeat(100),
+  String.raw` │ grep -n "^import.*@/i18n\|^import i18n\|^import appI18n" 'src/routes/skills.create.$type.tsx' src/routes/skills.index.tsx; grep -n`,
+  ` │ "formatQuotaExhausted" 'src/routes/skills.create.$type.tsx' | head -3`,
+  "╌".repeat(100),
+  " Shell expansion syntax in paths requires manual approval",
+  "",
+  " Do you want to proceed?",
+  " ❯ 1. Yes",
+  "   2. Yes, allow reading from /Users/me/acme/app/src/routes from this project",
+  "   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+  "   4. No",
+  "",
+  " Esc to cancel · Tab to amend · ctrl+x ctrl+k twice to stop background agents",
+].join("\n");
+
+const sidechain = (record) => ({ ...record, isSidechain: true });
+
+test("a subagent's dialog is read from the subagent's own transcript", async () => {
+  await withHome(async (home) => {
+    mkdirSync(join(home, "sessions"));
+    const project = join(home, "projects", "-repo");
+    const subagents = join(project, "s-4", "subagents");
+    mkdirSync(subagents, { recursive: true });
+    writeFileSync(join(home, "sessions", "44426.json"), JSON.stringify({ sessionId: "s-4", kind: "interactive" }));
+    // The main session: its open call is the Agent that started a subagent,
+    // which is never what a permission dialog is about.
+    writeFileSync(
+      join(project, "s-4.jsonl"),
+      jsonl([
+        claude.prompt("build the points UI"),
+        claude.assistant([{ type: "tool_use", id: "a1", name: "Agent", input: { description: "User-facing UI", subagent_type: "code-writer" } }], "tool_use"),
+      ]),
+    );
+    // Two subagents with a dialog each queued ("2 of 3"): the one on screen wins.
+    writeFileSync(
+      join(subagents, "agent-one.jsonl"),
+      jsonl([sidechain(claude.prompt("UI task")), sidechain(claude.assistant([bashUse("b1", GREP, "Check i18n imports in skills routes")], "tool_use"))]),
+    );
+    writeFileSync(join(subagents, "agent-one.meta.json"), JSON.stringify({ agentType: "code-writer" }));
+    writeFileSync(
+      join(subagents, "agent-two.jsonl"),
+      jsonl([sidechain(claude.prompt("tests")), sidechain(claude.assistant([bashUse("b2", "npm run test -- quota", "Run the quota tests")], "tool_use"))]),
+    );
+    writeFileSync(join(subagents, "agent-two.meta.json"), JSON.stringify({ agentType: "test-writer" }));
+
+    const run = (args) =>
+      args[1] === "process-info"
+        ? { status: 0, stdout: JSON.stringify(PROCESS_INFO) }
+        : { status: 0, stdout: JSON.stringify({ result: { agent: { agent: "claude" } } }) };
+    assert.equal(
+      sessionDialogBody("wN:p1", SUBAGENT_DIALOG, { run, env: { CLAUDE_CONFIG_DIR: home } }),
+      `Bash · Check i18n imports in skills routes · from the code-writer agent\n${GREP}\n\nDo you want to proceed?`,
+    );
+    assert.equal(claudeSubagentFiles(join(project, "s-4.jsonl")).length, 2);
+  });
+});
+
+test("a tool with nothing to show is never matched by its name alone", () => {
+  // "agent" is on the screen of every subagent dialog; the Agent call is not
+  // what it asks about.
+  const records = [claude.prompt("go"), claude.assistant([{ type: "tool_use", id: "a1", name: "Agent", input: { prompt: "x" } }], "tool_use")];
+  assert.equal(pendingDialog("claude", records, SUBAGENT_DIALOG), undefined);
+  const mcp = [claude.prompt("go"), claude.assistant([{ type: "tool_use", id: "m1", name: "mcp__db__execute_sql", input: { query: "select 1" } }], "tool_use")];
+  assert.match(pendingDialog("claude", mcp, "db - execute_sql (MCP)\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No").text, /^mcp__db__execute_sql\n/);
 });
