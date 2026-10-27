@@ -29,3 +29,37 @@ jobs:
         with:
           node-version: "22"
       - run: node --test test/*.test.mjs
+
+  # A version bump on main, once every test above has passed, becomes a GitHub
+  # release, and the `stable` branch moves to it. Installs made with
+  # `--ref stable` follow that branch: Oncall asks Herdr to update from it every
+  # few hours (src/lib/update.mjs), so a release is what reaches them — never a
+  # commit that was only pushed. A push that keeps the version releases nothing.
+  release:
+    needs: [node, macos]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Release the version in herdr-plugin.toml, if it is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' herdr-plugin.toml)"
+          if [ -z "$version" ]; then
+            echo "no version in herdr-plugin.toml" >&2
+            exit 1
+          fi
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released"
+            exit 0
+          fi
+          # The release is the commit that bumped the version: its subject is
+          # the title, the rest of its message the notes.
+          git log -1 --format=%B > message.txt
+          head -n 1 message.txt > title.txt
+          tail -n +3 message.txt > notes.md
+          gh release create "v$version" --target "$GITHUB_SHA" --title "$(cat title.txt)" --notes-file notes.md
+          git push origin "$GITHUB_SHA:refs/heads/stable" --force

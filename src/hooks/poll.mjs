@@ -1,9 +1,15 @@
 import {
+  PLUGIN_ID,
+  UPDATE_EVERY_MS,
+  checkForUpdate,
   connectFeishu,
   feishuCreds,
   feishuOpenId,
   loadDotEnv,
+  remoteChannels,
+  runHerdrAsync,
   seedConfigEnv,
+  sendRemote,
   sleep,
   telegramGetUpdates,
 } from "../lib/index.mjs";
@@ -136,4 +142,41 @@ function dispatchFeishu(envelope, creds, openId) {
   return outcome.response;
 }
 
-await Promise.all([telegramLoop(), feishuLoop()]);
+// Releases reach installed copies without anyone running a command: at start
+// (which is every Herdr start) and every few hours, ask Herdr to update this
+// plugin from its release branch. On an update, say so on the paired chats,
+// then hand over: the new installation's `poll` action restarts the poller
+// from the new code, and stopping this process is part of that.
+async function updateLoop() {
+  let said;
+  while (true) {
+    try {
+      const outcome = await checkForUpdate();
+      if (outcome.updated) {
+        const text = `oncall updated · v${outcome.from} → v${outcome.to}\n${outcome.url}`;
+        console.log(`update · v${outcome.from} → v${outcome.to}`);
+        for (const channel of remoteChannels()) {
+          await sendRemote(channel, text, { status: "update" }).catch((error) =>
+            console.error(`update notice failed · ${channel}: ${describeError(error)}`),
+          );
+        }
+        await runHerdrAsync(["plugin", "action", "invoke", "poll", "--plugin", PLUGIN_ID]);
+      } else if (outcome.failed) {
+        console.error(`update failed · ${outcome.detail}`);
+      } else {
+        // Once per change, like the idle lines: every six hours a "current"
+        // line says nothing new.
+        const line = outcome.skipped ? `update skipped · ${outcome.skipped}` : `update · v${outcome.version} is current`;
+        if (line !== said && outcome.skipped !== "checked recently") {
+          console.log(line);
+          said = line;
+        }
+      }
+    } catch (error) {
+      console.error(`update check failed · ${describeError(error)}`);
+    }
+    await sleep(UPDATE_EVERY_MS);
+  }
+}
+
+await Promise.all([telegramLoop(), feishuLoop(), updateLoop()]);

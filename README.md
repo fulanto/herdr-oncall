@@ -38,10 +38,10 @@ The interesting part isn't the notification — it's not sending one.
 ## Install
 
 ```sh
-herdr plugin install fulanto/herdr-oncall --yes
+herdr plugin install fulanto/herdr-oncall --ref stable --yes
 ```
 
-That compiles the desktop panel and starts the reply poller — no Herdr restart needed.
+That compiles the desktop panel and starts the reply poller — no Herdr restart needed. `--ref stable` follows releases: Oncall updates itself from there (see [Updates](#updates)).
 
 On a Mac that is all the setup there is: blocked and done open the panel straight away, with no phone channel configured. Check it:
 
@@ -105,6 +105,12 @@ Reply to it — you should get `sent · …` back.
 
 Your `.env` survives reinstalls.
 
+### Updates
+
+Releases install themselves. Every few hours, and whenever Herdr starts, Oncall asks Herdr to update it from the `stable` branch, which moves only when a new version is released. Herdr checks out and builds the new version beside the old one, and Oncall tells your paired chat `oncall updated · v… → v…`. A copy installed without `--ref stable` is moved onto it the first time. A checkout linked with `install.sh` is never touched. `AUTO_UPDATE=0` turns it off; `herdr plugin update com.codreamer.herdr.oncall --yes` updates by hand.
+
+Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: once the tests pass, CI publishes the release, titled and described by that commit's message, and moves `stable` to it.
+
 ## Config
 
 | key | default | meaning |
@@ -117,6 +123,7 @@ Your `.env` survives reinstalls.
 | `FEISHU_OPEN_ID` | set by `pair-feishu` | the only Feishu user allowed to drive your panes |
 | `FEISHU_DOMAIN` | set by `pair-feishu` | `feishu` or `lark` |
 | `INSTALL_AGENT_INTEGRATION` | `1` | install Herdr's Codex integration at startup, so Codex done pings read Codex's own answer. `0` = never touch agent configs |
+| `AUTO_UPDATE` | `1` | update from each release automatically (every few hours). `0` = by hand only |
 | `TELEGRAM_BOT_TOKEN` | required for Telegram | BotFather token |
 | `TELEGRAM_CHAT_ID` | set by pairing | the only chat allowed to drive your panes |
 | `TELEGRAM_POLL` | `1` | long-poll for replies |
