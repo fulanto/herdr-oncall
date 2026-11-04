@@ -1,17 +1,16 @@
 import { randomBytes } from "node:crypto";
 import {
-  channelList,
   clearFeishuPair,
-  feishuRegistrationBegin,
   feishuRegistrationWait,
   loadDotEnv,
   panelAvailable,
   printQr,
   readFeishuPair,
+  saveFeishuPairing,
   seedConfigEnv,
   sendFeishu,
   showPanel,
-  upsertEnvValue,
+  startFeishuPairing,
   writeFeishuPair,
 } from "../lib/index.mjs";
 import { describeError, restartPoller, spawnDetached, withTimestamps } from "../inbound/poller.mjs";
@@ -19,6 +18,10 @@ import { describeError, restartPoller, spawnDetached, withTimestamps } from "../
 // Pair Feishu by scanning: Feishu's app registration creates a bot app for the
 // person who scans and hands back its credentials together with their open_id,
 // so one scan is both the bot setup and the pairing. Nothing to paste.
+//
+// Every scan creates a bot, so a machine that is already paired is told so and
+// scans nothing (`startFeishuPairing`); `unpair-feishu` is the way to start
+// over with a new one.
 //
 //   pair-feishu.mjs            start a registration, print its QR code
 //   pair-feishu.mjs wait <id>  the background worker that waits for the scan
@@ -37,13 +40,12 @@ if (process.argv[2] === "wait") {
   process.exit(await waitForScan(process.argv[3]));
 }
 
-let begun;
-try {
-  begun = await feishuRegistrationBegin();
-} catch (error) {
-  console.error(describeError(error));
-  process.exit(1);
+const plan = await startFeishuPairing({ restartPoller, describe: describeError });
+if (!plan.begun) {
+  process.exit(plan.code);
 }
+
+const { begun } = plan;
 const id = randomBytes(8).toString("hex");
 writeFeishuPair({
   id,
@@ -114,14 +116,11 @@ async function waitForScan(id) {
     return 1;
   }
 
-  upsertEnvValue("FEISHU_APP_ID", result.appId);
-  upsertEnvValue("FEISHU_APP_SECRET", result.appSecret);
-  upsertEnvValue("FEISHU_OPEN_ID", result.openId);
-  upsertEnvValue("FEISHU_DOMAIN", result.brand);
-  // Scanning is choosing the channel: pings go to Feishu from now on. Someone
-  // who wants both lists both.
-  if (!channelList().includes("feishu")) {
-    upsertEnvValue("CHANNEL", "feishu");
+  // Asked again here, not only while polling: unpair-feishu (or a newer
+  // pair-feishu) can withdraw the scan after Feishu approved it and before
+  // this line, and the result must not pair the machine behind its back.
+  if (!saveFeishuPairing(result, { id })) {
+    return 0;
   }
   clearFeishuPair(id);
   const poller = restartPoller();

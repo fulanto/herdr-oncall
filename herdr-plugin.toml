@@ -1,6 +1,6 @@
 id = "com.codreamer.herdr.oncall"
 name = "Oncall"
-version = "0.6.4"
+version = "0.6.5"
 min_herdr_version = "0.7.0"
 description = "Host control plane: desktop panel plus Telegram or Feishu pings on blocked/done, reply into the pane."
 # Every entry point is /bin/bash and the panel is macOS-only; there is no Windows path.
@@ -50,6 +50,11 @@ command = ["/bin/bash", "bin/run-node.sh", "src/actions/pair.mjs"]
 id = "pair-feishu"
 title = "Pair Feishu (scan QR)"
 command = ["/bin/bash", "bin/run-node.sh", "src/actions/pair-feishu.mjs"]
+
+[[actions]]
+id = "unpair-feishu"
+title = "Unpair Feishu"
+command = ["/bin/bash", "bin/run-node.sh", "src/actions/unpair-feishu.mjs"]
 
 [[actions]]
 id = "test"

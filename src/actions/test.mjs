@@ -4,6 +4,8 @@ import {
   formatMessage,
   loadDotEnv,
   missingIntegrations,
+  modeEnabled,
+  modeHint,
   panelState,
   remoteChannels,
   seedConfigEnv,
@@ -13,6 +15,12 @@ import {
 } from "../lib/index.mjs";
 
 loadDotEnv();
+
+// The test ping goes out whether or not Oncall is on, so a toggled-off plugin
+// passed every test while sending nothing for blocked or done. Say so first.
+for (const line of modeHint(modeEnabled())) {
+  console.error(line);
+}
 
 const channels = remoteChannels();
 

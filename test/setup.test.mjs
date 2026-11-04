@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { integrationLines, setupHints } from "../src/lib/index.mjs";
+import { integrationLines, modeHint, setupHints } from "../src/lib/index.mjs";
 
 const envPath = "/cfg/.env";
 // A current Node unless a test says otherwise, so the hints do not depend on
@@ -78,6 +78,31 @@ test("a paired channel that CHANNEL leaves out says so", () => {
   const lines = setupHints({ ...fresh, panel: "ready", token: "t", chatId: "1", feishu: true, channels: ["feishu"] });
   assert.ok(lines.includes("feishu: paired"));
   assert.ok(lines.includes("telegram: paired, but CHANNEL does not include it"));
+});
+
+// A reinstall keeps the pairing; scanning again after one is what created a
+// second bot in Feishu.
+test("a paired Feishu is told pairing survives a reinstall, and how to start over", () => {
+  const lines = setupHints({ ...fresh, panel: "ready", feishu: true, channels: ["feishu"] });
+  const paired = lines.indexOf("feishu: paired");
+  assert.ok(paired >= 0, lines.join("\n"));
+  assert.equal(
+    lines[paired + 1],
+    "  (kept across reinstalls and updates; to pair a new bot, unpair first: herdr plugin action invoke unpair-feishu --plugin com.codreamer.herdr.oncall)",
+  );
+});
+
+// `test` sends its ping even with Oncall toggled off, so the one thing that
+// tells "pings are off" from "pings are broken" is saying it.
+test("oncall toggled off is said, and how to turn it back on", () => {
+  assert.deepEqual(modeHint(true), []);
+  const [line] = modeHint(false);
+  assert.equal(
+    line,
+    "oncall: off, blocked and done send nothing until it is turned back on: herdr plugin action invoke enable --plugin com.codreamer.herdr.oncall",
+  );
+  assert.ok(setupHints({ ...fresh, panel: "ready", enabled: false }).includes(line));
+  assert.ok(!setupHints({ ...fresh, panel: "ready" }).some((item) => item.startsWith("oncall: off")));
 });
 
 test("an agent still without Herdr's integration is pointed at installing it", () => {

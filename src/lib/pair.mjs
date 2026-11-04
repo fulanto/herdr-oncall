@@ -144,3 +144,33 @@ export function clearFeishuPair(id) {
     /* already gone */
   }
 }
+
+// Which worker the scan in progress belongs to, expired or not, or undefined
+// once the record is gone (withdrawn, finished, or replaced by a newer one
+// with a different id).
+export function feishuPairId() {
+  try {
+    return JSON.parse(readFileSync(feishuPairPath(), "utf8"))?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+// Withdraw whatever scan is in progress, whoever started it: `unpair-feishu`
+// does, so a worker still waiting on a scan finds the record gone (its
+// `wanted` check) and stands down instead of pairing the machine again after
+// it was unpaired. Returns the withdrawn record, expired or not, or undefined.
+export function cancelFeishuPair() {
+  let record;
+  try {
+    record = JSON.parse(readFileSync(feishuPairPath(), "utf8"));
+  } catch {
+    return undefined;
+  }
+  try {
+    unlinkSync(feishuPairPath());
+  } catch {
+    /* already gone */
+  }
+  return record ?? undefined;
+}

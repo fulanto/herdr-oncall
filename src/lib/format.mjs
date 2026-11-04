@@ -93,7 +93,7 @@ export function screenHasLiveDialog(screen) {
   }
   for (let i = region.end; i < lines.length; i++) {
     const line = lines[i];
-    if (isBlank(line) || isRuleLine(line) || isChromeLine(line)) {
+    if (isBlank(line) || isRuleLine(line) || isFooterAt(lines, i)) {
       continue;
     }
     return false;
@@ -157,7 +157,7 @@ function trailingOptionRun(lines) {
   let tailIndent = Infinity;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i];
-    if (isBlank(line) || isRuleLine(line) || isChromeLine(line)) {
+    if (isBlank(line) || isRuleLine(line) || isFooterAt(lines, i)) {
       continue;
     }
     if (isOptionLine(line)) {
@@ -214,7 +214,15 @@ function trailingOptionRun(lines) {
       }
       break;
     }
-    if (isBlank(line) || isChromeLine(line) || isTurnMarker(line)) {
+    if (isBlank(line) || isTurnMarker(line)) {
+      break;
+    }
+    // A choice's description hangs under it, deeper than the numbers, and can
+    // read like a key hint: "Esc to abandon the change" under "2. Go back".
+    // Taken for chrome, it ended the run there and the choices above it were
+    // lost — buttons gone, and the cursor on one of them no longer an open
+    // menu. Hanging under a choice settles it: that is a description.
+    if (isChromeLine(line) && !(indentOf(line) > column && hangsUnderOption(lines, i, column))) {
       break;
     }
     if (indentOf(line) > column) {
@@ -224,6 +232,21 @@ function trailingOptionRun(lines) {
     break;
   }
   return { start: top, end };
+}
+
+// Does line `i` belong to the choice above it — every line between them hung
+// deeper than the option column, with no blank in the way?
+function hangsUnderOption(lines, i, column) {
+  for (let j = i - 1; j >= 0; j--) {
+    const line = lines[j];
+    if (isOptionLine(line)) {
+      return true;
+    }
+    if (isBlank(line) || indentOf(line) <= column) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function optionNumber(line) {
@@ -545,6 +568,100 @@ function isChromeLine(line) {
     return true;
   }
   return false;
+}
+
+// Codex's key hints are items of the form "<key> to <what it does>" — "tab to
+// add notes", "⌃x enter to submit answer", "tab or esc to clear notes", "←/→ to
+// navigate questions" — joined by " | ", sometimes after an "option 4/5"
+// position, and it wraps them between items when the pane is too narrow for one
+// line. A multi-question form's hints run to about 90 columns, so a Herdr split
+// narrower than that put "tab to add notes | enter to submit answer" on a line
+// of its own, without the "esc to" that made the full line chrome. Read as
+// content below the choices, it turned a live form into one merely quoted, and
+// the ping was skipped. Every item has to name a key, so prose that happens to
+// say "to submit" is not taken for one.
+//
+// The shape alone is not enough, though: a choice's description can read the
+// same ("Return to the previous screen" under "2. Go back"). So this is not a
+// chrome rule. Only `isFooterAt` uses it, for lines below the last choice.
+const HINT_KEY =
+  "(?:[⌃⌥⇧⌘]\\S{1,8}|(?:ctrl|alt|shift|cmd|opt)\\+\\S{1,8}|enter|esc|escape|tab|space|return|backspace|delete|home|end|pgup|pgdn|f\\d{1,2}|[←→↑↓](?:\\/[←→↑↓])?|[a-z])";
+const HINT_KEYS = `${HINT_KEY}(?:\\s+${HINT_KEY})?`;
+const KEY_TIP = new RegExp(
+  `^(?:${HINT_KEYS}(?:\\s+(?:or|\\/)\\s+${HINT_KEYS})?\\s+(?:to\\s+[a-z][\\w/ -]*|change question)|option \\d+\\/\\d+)$`,
+  "i",
+);
+
+function isKeyTipLine(text) {
+  if (text.length >= 120) {
+    return false;
+  }
+  return text.split(/\s+\|\s+/).every((item) => KEY_TIP.test(item.trim()));
+}
+
+// Chrome as the trailing walk sees it: the lines under the last choice, read
+// from the bottom up. Everything `isChromeLine` takes, plus two shapes that
+// are footer only because of where they sit:
+//
+// - a Codex key-hint line, in a block of its own (a blank line or a rule above
+//   it, nothing in it but hints and chrome);
+// - the rest of a hint the terminal wrapped mid-sentence. Codex's "Press enter
+//   to confirm or esc to cancel" is 43 columns with its indent; narrower than
+//   that it breaks after "to" and leaves "cancel" alone underneath, and that
+//   one word was content below the choices — no live dialog, no ping. A hint
+//   never ends on "to" or "or", so one that does was cut, and the few words
+//   right under it are the rest of it.
+//
+// Both must also sit no deeper than the last choice's number. Footers are
+// drawn at the dialog's margin; a choice's description and a wrapped label hang
+// deeper, and must stay content however much they read like a hint.
+function isFooterAt(lines, i) {
+  if (isChromeLine(lines[i])) {
+    return true;
+  }
+  if (!atFooterColumn(lines, i)) {
+    return false;
+  }
+  if (isKeyTipLine(lines[i].trim()) && inFooterBlock(lines, i)) {
+    return true;
+  }
+  const above = lines[i - 1];
+  return (
+    above !== undefined &&
+    !isBlank(above) &&
+    /\s(?:to|or|and)$|\s[|·]$/.test(above.trim()) &&
+    /^\S+(?:\s+\S+){0,2}$/.test(lines[i].trim()) &&
+    isFooterAt(lines, i - 1)
+  );
+}
+
+// No deeper than the number of the nearest choice above, if there is one.
+function atFooterColumn(lines, i) {
+  for (let j = i - 1; j >= 0; j--) {
+    if (isOptionLine(lines[j])) {
+      return indentOf(lines[i]) <= lines[j].search(/\d/);
+    }
+  }
+  return true;
+}
+
+// The block of lines around `i` (between blank lines or rules) starts after
+// one, and holds nothing but hints and chrome.
+function inFooterBlock(lines, i) {
+  const boundary = (line) => isBlank(line) || isRuleLine(line);
+  let top = i;
+  while (top > 0 && !boundary(lines[top - 1])) {
+    top--;
+  }
+  if (top === 0) {
+    return false;
+  }
+  for (let j = top; j < lines.length && !boundary(lines[j]); j++) {
+    if (!isChromeLine(lines[j]) && !isKeyTipLine(lines[j].trim())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isUserMarker(line) {

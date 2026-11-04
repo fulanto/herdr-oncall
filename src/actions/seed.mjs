@@ -6,6 +6,7 @@ import {
   integrationLines,
   loadDotEnv,
   missingIntegrations,
+  modeEnabled,
   panelState,
   seedConfigEnv,
   setupHints,
@@ -35,5 +36,6 @@ console.log(
     channels: channelList(),
     integrations: missingIntegrations(),
     envPath,
+    enabled: modeEnabled(),
   }).join("\n"),
 );

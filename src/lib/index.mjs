@@ -5,6 +5,7 @@ export * from "./format.mjs";
 export * from "./gate.mjs";
 export * from "./telegram.mjs";
 export * from "./feishu.mjs";
+export * from "./feishu-pairing.mjs";
 export * from "./feishu-ws.mjs";
 export * from "./channels.mjs";
 export * from "./pair.mjs";

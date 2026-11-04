@@ -44,6 +44,43 @@ export function shouldNotify(status, rawNotifyOn) {
   return notifyStatuses(rawNotifyOn).includes(status);
 }
 
+// The statuses someone is waiting to hear about. A dropped one of these says
+// why in the plugin log; working and idle arrive on every turn and stay quiet.
+function watched(status) {
+  return status === "blocked" || status === "done" || status === "finish";
+}
+
+// Whether an event goes on to the notify hook's real work. Returns
+// { go: true } or { go: false, reason }, where `reason` is what to log, empty
+// for an event nobody is waiting on. Before this, an event dropped here left an
+// empty line in the plugin log, and so did one dropped for any other reason.
+export function eventGate(status, { enabled = true, notifyOn = process.env.NOTIFY_ON } = {}) {
+  if (!enabled) {
+    return { go: false, reason: watched(status) ? "oncall is off (toggled), nothing is sent" : "" };
+  }
+  if (!shouldNotify(status, notifyOn)) {
+    const list = notifyStatuses(notifyOn).join(",");
+    return { go: false, reason: watched(status) ? `${status} is not in NOTIFY_ON=${list}` : "" };
+  }
+  return { go: true };
+}
+
+// Why a blocked ping that sat out its wait (the panel, or BLOCKED_DELAY_SEC)
+// is not sent after all, or undefined when it goes out. Each of these used to
+// end the hook without a word, which is why a blocked ping that never reached
+// the phone could not be told apart from one that was never meant to.
+export function blockedWaitVerdict({ stillMine, screen, real }) {
+  if (!stillMine) {
+    return "a newer blocked event for this pane took over";
+  }
+  if (real) {
+    return undefined;
+  }
+  return String(screen ?? "").trim()
+    ? "the dialog left the screen during the wait (answered)"
+    : "pane screen empty after the wait";
+}
+
 export function shouldDebounce(paneId, status, now = Date.now()) {
   const windowMs = Number(process.env.DEBOUNCE_MS || 2000);
   if (!paneId || !status || !Number.isFinite(windowMs) || windowMs <= 0) {

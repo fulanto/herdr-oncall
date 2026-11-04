@@ -309,6 +309,164 @@ Press enter to confirm or esc to cancel`;
   );
 });
 
+// Codex sets its key hints as "<key> to <what it does>" items joined by " | ",
+// and wraps them between items when the pane is too narrow for one line. Taken
+// from openai/codex's own TUI snapshots (request_user_input footer_wrap, at 52
+// columns): a multi-question form's hints run to about 90 columns, so any
+// Herdr split narrower than that draws them on two lines, and the first one,
+// "tab to add notes | enter to submit answer", read as content under the
+// choices. The form counted as a dialog merely quoted, and the ping was skipped.
+test("a Codex form whose key hints wrap in a narrow pane is still a live dialog", () => {
+  const form = (hints) =>
+    [
+      "• I need one decision before going on.",
+      "",
+      "  Question 1/2 (2 unanswered)",
+      "  Choose an option.",
+      "",
+      "    1. Option 1  First choice.",
+      "  › 2. Option 2  Second choice.",
+      "    3. Option 3  Third choice.",
+      "",
+      ...hints,
+    ].join("\n");
+  const shapes = [
+    ["  tab to add notes | enter to submit answer", "  ←/→ to navigate questions | esc to interrupt"],
+    ["  tab to add notes", "  enter to submit all", "  ←/→ to navigate questions", "  esc to interrupt"],
+    ["  tab or esc to clear notes | ⌃x enter to submit answer", "  esc to interrupt"],
+    // A list that scrolls puts its position first (request_user_input
+    // hidden_options_footer): "option 4/5 | tab to add notes | …".
+    ["  option 2/3 | tab to add notes | enter to submit answer", "  esc to interrupt"],
+  ];
+  for (const hints of shapes) {
+    const screen = form(hints);
+    assert.equal(screenHasLiveDialog(screen), true, hints.join(" / "));
+    assert.equal(screenHasOpenMenu(screen), true, hints.join(" / "));
+    assert.deepEqual(
+      parseBlockedOptions(screen).map((item) => item.send),
+      ["1", "2", "3"],
+    );
+  }
+});
+
+// The approval's own footer, "Press enter to confirm or esc to cancel", is 43
+// columns with its indent. Under that it breaks after "to" and leaves "cancel"
+// alone underneath (openai/codex approval_overlay clipping_tests, 40x10), and
+// that one word was content below the choices: no live dialog, no ping.
+test("a Codex approval whose footer wraps in a narrow pane is still a live dialog", () => {
+  const clipped = [
+    "• Explored",
+    "  └ List /tmp/draft",
+    "",
+    "  Would you like to run the following",
+    "  command?",
+    "",
+    "  [… 43 lines] ⌃g view all",
+    "› 1. Yes, proceed (y)",
+    "  2. No, and tell Codex what to do",
+    "     differently (esc)",
+    "  Press enter to confirm or esc to",
+    "  cancel",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(clipped), true);
+  assert.deepEqual(parseBlockedOptions(clipped), [
+    { key: "1", send: "y", label: "Yes, proceed" },
+    { key: "2", send: "esc", label: "No, and tell Codex what to do differently" },
+  ]);
+
+  const spaced = [
+    "  Would you like to run the following command?",
+    "",
+    "  $ rm -rf /tmp/draft",
+    "",
+    "› 1. Yes, proceed (y)",
+    "  2. No (esc)",
+    "",
+    "  Press enter to confirm or esc to",
+    "  cancel",
+  ].join("\n");
+  assert.equal(screenHasLiveDialog(spaced), true);
+  assert.deepEqual(
+    parseBlockedOptions(spaced).map((item) => item.send),
+    ["y", "esc"],
+  );
+});
+
+// What the two rules above must not swallow: a hint that ended where it should
+// has nothing left to wrap, so a word under it is content, and a line of prose
+// that merely says "to submit" names no key.
+test("a finished key hint, or prose about submitting, is not chrome", () => {
+  const dialog = [
+    "  Would you like to run the following command?",
+    "",
+    "  $ rm -rf /tmp/draft",
+    "",
+    "› 1. Yes, proceed (y)",
+    "  2. No (esc)",
+    "",
+  ];
+  assert.equal(
+    screenHasLiveDialog([...dialog, "  Press enter to confirm or esc to cancel", "  rollback"].join("\n")),
+    false,
+  );
+  assert.equal(screenHasLiveDialog([...dialog, "Click here to submit the form | then wait"].join("\n")), false);
+  // A hint-shaped line with no blank line between it and the choices is part
+  // of what the dialog drew, not its footer.
+  assert.equal(
+    screenHasLiveDialog([...dialog.slice(0, -1), "  Return to the previous screen"].join("\n")),
+    false,
+  );
+});
+
+// A choice's description can read exactly like a key hint. The first cut of
+// the Codex footer rule took "Return to the previous screen" under "2. Go
+// back" for chrome everywhere, so the walk up the choice list stopped there:
+// only "3." was left, and with the cursor on 1 or 2 the form was no longer an
+// open menu. The footer rule now applies only under the last choice, at the
+// dialog's margin, and these screens read exactly as they did before it — the
+// fingerprints are the ones the code before this change gave them.
+//
+// "Esc to …" never worked: the old "esc to" chrome rule cut the list the same
+// way. A line hanging under a choice is that choice's description now, so it
+// keeps every choice too, with its own fingerprint.
+test("a choice's description that reads like a key hint keeps every choice", () => {
+  const described = (description, cursor) => {
+    const mark = (n) => (n === cursor ? "  ❯ " : "    ");
+    return [
+      "⏺ The migration half ran.",
+      "",
+      "  Which way should the rollout go?",
+      "",
+      `${mark(1)}1. Roll forward`,
+      "       Keep the new schema and backfill the rest.",
+      `${mark(2)}2. Go back`,
+      `       ${description}`,
+      `${mark(3)}3. Type something.`,
+      "",
+      "  Enter to select · Esc to cancel",
+    ].join("\n");
+  };
+  const unchanged = {
+    "Return to the previous screen": "600b4d141bcbf41e",
+    "Tab to the next field and fill it in later": "73b7dfce46f71b89",
+    "Enter to keep the old schema as it is": "821d7a08ccb1d9c5",
+  };
+  const cases = { ...unchanged, "Esc to abandon the change and keep the old schema": "aee154d0f59ef5fc" };
+  for (const [description, fingerprint] of Object.entries(cases)) {
+    for (const cursor of [1, 2]) {
+      const screen = described(description, cursor);
+      assert.deepEqual(
+        parseBlockedOptions(screen).map((option) => `${option.send}:${option.label}`),
+        ["1:Roll forward", "2:Go back", "3:Type something."],
+        description,
+      );
+      assert.equal(screenHasOpenMenu(screen), true, `${description} · cursor on ${cursor}`);
+      assert.equal(screenHasLiveDialog(screen), true, description);
+      assert.equal(dialogFingerprint(screen), fingerprint, description);
+    }
+  }
+});
+
 test("a live dialog survives the terminal footers drawn under it", () => {
   // The labelled separator ("──── ↯ ─") and the status footers are chrome. An
   // earlier version stopped scanning at the separator and reported no dialog,

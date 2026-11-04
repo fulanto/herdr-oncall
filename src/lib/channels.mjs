@@ -45,3 +45,34 @@ export async function sendRemote(name, text, { status, options = [] } = {}) {
     replyMarkup: optionKeyboard(choices),
   });
 }
+
+// One ping on every channel given, each on its own: one that is down must not
+// cost the other its ping. What went out is logged as well as what failed. A
+// log that spoke only on failure could not tell a ping that was sent from one
+// that was never attempted, and "the test arrives but a blocked ping does not"
+// could not be answered from it at all. `sent(channel, messageId)` records the
+// message so replies and taps can find their pane.
+export async function pingChannels(
+  channels,
+  text,
+  {
+    status,
+    options = [],
+    where,
+    send = sendRemote,
+    sent = () => {},
+    log = console.log,
+    error = console.error,
+    describe = (err) => err?.message || String(err),
+  } = {},
+) {
+  for (const channel of channels) {
+    try {
+      const messageId = await send(channel, text, { status, options });
+      log(`sent · ${channel} · ${where}`);
+      sent(channel, messageId);
+    } catch (err) {
+      error(`${channel} ping failed · ${where}: ${describe(err)}`);
+    }
+  }
+}

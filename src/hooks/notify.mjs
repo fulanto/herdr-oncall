@@ -1,8 +1,11 @@
 import {
+  actionCommand,
   agentDetectionSkipped,
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
+  blockedWaitVerdict,
+  channelList,
   consecutiveGate,
   currentPaneStatus,
   decideBlockedReal,
@@ -10,6 +13,7 @@ import {
   dialogFingerprint,
   doneSnippet,
   ensureIntegrations,
+  eventGate,
   formatMessage,
   formatWhere,
   integrationLines,
@@ -20,6 +24,7 @@ import {
   paneAgentName,
   paneIdFrom,
   panelAvailable,
+  pingChannels,
   readJsonEnv,
   readPaneScreen,
   readScreenSettled,
@@ -29,11 +34,9 @@ import {
   saveScreen,
   screenHasLiveDialog,
   screenHasOpenMenu,
-  sendRemote,
   sessionAnswer,
   sessionDialogBody,
   shouldDebounce,
-  shouldNotify,
   showPanel,
   sleep,
   statusTitle,
@@ -43,9 +46,24 @@ import {
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
 import { describeError, ensurePoller } from "../inbound/poller.mjs";
 
+// Every way this hook ends without a ping says so in the plugin log, for the
+// statuses someone waits on. When a colleague's blocked pings stopped reaching
+// Feishu while `test` still did, the log had nothing to offer: a hook that
+// dropped the event, one that waited and found the dialog answered, and one
+// that sent the ping all left the same empty line.
 loadDotEnv();
 ensurePoller();
+
+const context = readJsonEnv("HERDR_PLUGIN_CONTEXT_JSON");
+const event = readJsonEnv("HERDR_PLUGIN_EVENT_JSON");
+const paneId = paneIdFrom(event, context);
+const reported = resolveStatus(event, context);
+
 if (!modeEnabled()) {
+  const { reason } = eventGate(reported, { enabled: false });
+  if (reason) {
+    console.log(`off · ${reported} · ${paneId} · ${reason}; turn it back on: ${actionCommand("enable")}`);
+  }
   process.exit(0);
 }
 
@@ -58,11 +76,6 @@ if (!channels.length && !usePanel) {
   process.exit(0);
 }
 
-const context = readJsonEnv("HERDR_PLUGIN_CONTEXT_JSON");
-const event = readJsonEnv("HERDR_PLUGIN_EVENT_JSON");
-const paneId = paneIdFrom(event, context);
-const reported = resolveStatus(event, context);
-
 // Herdr misses some questions. Claude Code's multi-question form has been
 // reported `done`, and then `idle`, with the form still up and waiting, and the
 // done panel showed it as plain text with nothing to press. A `done` with an
@@ -74,7 +87,11 @@ const promoted =
   screenHasOpenMenu(await readScreenSettled(() => readPaneScreen(paneId), { sleep }));
 const status = promoted ? "blocked" : reported;
 
-if (!shouldNotify(status)) {
+const gate = eventGate(status);
+if (!gate.go) {
+  if (gate.reason) {
+    console.log(`ignored · ${paneId} · ${gate.reason}`);
+  }
   process.exit(0);
 }
 
@@ -274,7 +291,12 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
 }
 
 async function pingRemote(screen, doneBody) {
-  if (!channels.length || shouldDebounce(paneId, status)) {
+  if (!channels.length) {
+    console.log(`not sent · ${where} · no paired phone channel in CHANNEL=${channelList().join(",")}`);
+    return;
+  }
+  if (shouldDebounce(paneId, status)) {
+    console.log(`debounced · ${where} · ${status} was pinged for this pane under DEBOUNCE_MS ago`);
     return;
   }
   const snippet = status === "blocked" ? blockedBody(screen) : isDone ? (doneBody ?? doneSnippet(screen)) : "";
@@ -284,15 +306,27 @@ async function pingRemote(screen, doneBody) {
   const options = dialogChoices(screen, { hookAuthoritative: !dialogBacked });
   const fingerprint = dialogBacked ? dialogFingerprint(screen) : undefined;
   const text = formatMessage(context, event, status, snippet);
-  // Each channel on its own: one that is down must not cost the other its ping.
-  for (const channel of channels) {
-    try {
-      const messageId = await sendRemote(channel, text, { status, options });
-      rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options, channel, text });
-    } catch (error) {
-      console.error(`${channel} ping failed · ${where}: ${describeError(error)}`);
-    }
+  await pingChannels(channels, text, {
+    status,
+    options,
+    where,
+    describe: describeError,
+    sent: (channel, messageId) =>
+      rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options, channel, text }),
+  });
+}
+
+// After the wait: send, or say why not. A newer blocked event for the pane
+// owns the ping now, and a dialog gone from the screen was answered.
+async function pingAfterWait(started) {
+  const later = await readScreenSettled(readScreen, { sleep });
+  const stillMine = blockedDelayStillMine(paneId, started);
+  const verdict = blockedWaitVerdict({ stillMine, screen: later, real: stillMine && blockedIsReal(later) });
+  if (verdict) {
+    console.log(`not sent · ${where} · ${verdict}`);
+    return;
   }
+  await pingRemote(later);
 }
 
 if (status === "blocked") {
@@ -313,6 +347,7 @@ if (status === "blocked") {
     // time out and fall through to the phone. If the user is (or arrives) at
     // the pane, the rest of the wait runs silently and the ping still follows.
     if (shouldDebounce(paneId, "panel:blocked")) {
+      console.log(`debounced · ${where} · a blocked event for this pane is already being handled`);
       process.exit(0);
     }
     const started = markBlockedDelay(paneId);
@@ -351,6 +386,9 @@ if (status === "blocked") {
         fingerprint: next.fingerprint,
       };
     }
+    if (outcome === "superseded") {
+      console.log(`not sent · ${where} · a newer event for this pane took the panel over`);
+    }
     if (outcome === "handled" || outcome === "superseded" || outcome === "resolved") {
       process.exit(0);
     }
@@ -360,22 +398,14 @@ if (status === "blocked") {
         await sleep(remaining);
       }
     }
-    const later = await readScreenSettled(readScreen, { sleep });
-    if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
-      process.exit(0);
-    }
-    await pingRemote(later);
+    await pingAfterWait(started);
     process.exit(0);
   }
 
   if (delayMs > 0) {
     const started = markBlockedDelay(paneId);
     await sleep(delayMs);
-    const later = await readScreenSettled(readScreen, { sleep });
-    if (!blockedDelayStillMine(paneId, started) || !blockedIsReal(later)) {
-      process.exit(0);
-    }
-    await pingRemote(later);
+    await pingAfterWait(started);
   } else {
     await pingRemote(screen);
   }

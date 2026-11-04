@@ -7,6 +7,7 @@ import {
   integrationLines,
   loadDotEnv,
   missingIntegrations,
+  modeEnabled,
   panelState,
   pluginRoot,
   runHerdr,
@@ -55,6 +56,7 @@ console.log(
     channels: channelList(),
     integrations: missingIntegrations(),
     envPath,
+    enabled: modeEnabled(),
   }).join("\n"),
 );
 

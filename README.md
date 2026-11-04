@@ -63,6 +63,14 @@ herdr plugin action invoke pair-feishu --plugin com.codreamer.herdr.oncall
 
 On a Mac a panel with a QR code opens; elsewhere the code and its link are in `herdr plugin log list --plugin com.codreamer.herdr.oncall --limit 5`. Scan it with the Feishu (or Lark) app and approve. That one scan creates your Oncall bot, and whoever scanned is the only Feishu user it will take answers from. The bot messages you `paired`, and `.env` gets `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_OPEN_ID`, `FEISHU_DOMAIN` and `CHANNEL=feishu`.
 
+Pairing survives reinstalls and updates, so there is no need to scan again after one: every scan creates another bot. Run `pair-feishu` on a machine that is already paired and it scans nothing. It checks with Feishu that the bot still works, messages it `already paired`, and tells you so, in the log and on the Mac panel. Only if Feishu says the saved bot is disabled or its secret is wrong does the scan go ahead and make a new one. If Feishu cannot confirm the pairing for any other reason (offline, an access policy, a rate limit), nothing is created; try again later. To start over with a new bot on purpose, unpair first:
+
+```sh
+herdr plugin action invoke unpair-feishu --plugin com.codreamer.herdr.oncall
+```
+
+That empties the `FEISHU_*` keys in `.env`, takes `feishu` out of `CHANNEL` (back to `telegram` if it was the only one), withdraws a scan still in progress so it cannot pair the machine afterwards, and messages the old bot `unpaired`. The old bot itself stays in Feishu until you delete it on the Feishu open platform. The next `pair-feishu` creates a new one.
+
 A blocked ping arrives as a card with one button per option; the card replaces its buttons with what was sent once you tap. To answer with text, reply to the ping (quote it); a plain message goes to the pane the last ping was about. Receiving replies needs Node 22 or later, since Feishu delivers them over a WebSocket.
 
 ### Telegram
@@ -96,6 +104,28 @@ Reply to it — you should get `sent · …` back.
 
 `plugin action invoke` returns JSON immediately; the real output is in `plugin log list`.
 
+If Oncall is toggled off, `test` still sends its ping, but says first that blocked and done send nothing until you turn it back on (`enable` action).
+
+### When a ping does not arrive
+
+On a Mac a blocked prompt goes to the panel first, and to the phone only if nobody answers it within `BLOCKED_DELAY_SEC` (60s by default). If you answer within that time, on the panel or in the terminal, no phone ping goes out. That is by design, and it is why `test`, which sends straight away, can arrive when a blocked prompt you answered did not.
+
+Every blocked or done event leaves a line in `herdr plugin log list --plugin com.codreamer.herdr.oncall` saying what happened:
+
+| line | meaning |
+|---|---|
+| `sent · feishu · <where>` | the ping went out on that channel |
+| `<channel> ping failed · <where>: …` | the channel refused it or could not be reached |
+| `not sent · <where> · the dialog left the screen during the wait (answered)` | answered before the delay ran out |
+| `not sent · <where> · a newer blocked event for this pane took over` | a later event for the same pane owns the ping |
+| `not sent · <where> · no paired phone channel in CHANNEL=…` | `CHANNEL` names no paired channel |
+| `panel sent · <where>` / `panel closed · <where> · …` | answered on the panel, or in the terminal while it was up |
+| `skipped · <where> · blocked but no dialog on screen · tail: …` | Herdr said blocked but no prompt was recognised on screen; the screen is saved to `last-skipped-screen.txt` |
+| `debounced · <where> · …` | the same pane and status within `DEBOUNCE_MS` |
+| `off · …` / `ignored · … · not in NOTIFY_ON=…` | Oncall is toggled off, or `NOTIFY_ON` leaves the status out |
+
+No line at all for a blocked prompt means Herdr never reported the pane as blocked. Check `herdr pane list` while the prompt is up.
+
 ### Requirements
 
 - **Herdr** ≥ 0.7.0 and **Node.js** ≥ 18 (≥ 22 to receive Feishu replies). No npm dependencies — `node:` builtins and `fetch` only.
@@ -118,8 +148,8 @@ Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: onc
 | `NOTIFY_ON` | `blocked,done` | which statuses to notify on |
 | `BLOCKED_DELAY_SEC` | `60` | how long the panel waits before the phone takes over. `0` = ping immediately |
 | `DEBOUNCE_MS` | `2000` | suppress a repeat of the same pane + status |
-| `CHANNEL` | `telegram` | where pings go: `telegram`, `feishu`, or `telegram,feishu`. Replies are taken from every paired channel |
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | set by `pair-feishu` | the bot the scan created |
+| `CHANNEL` | `telegram` | where pings go: `telegram`, `feishu`, or `telegram,feishu`. Replies are taken from every paired channel. `pair-feishu` adds feishu, `unpair-feishu` removes it |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | set by `pair-feishu` | the bot the scan created; emptied by `unpair-feishu` |
 | `FEISHU_OPEN_ID` | set by `pair-feishu` | the only Feishu user allowed to drive your panes |
 | `FEISHU_DOMAIN` | set by `pair-feishu` | `feishu` or `lark` |
 | `INSTALL_AGENT_INTEGRATION` | `1` | install Herdr's Codex integration at startup, so Codex done pings read Codex's own answer. `0` = never touch agent configs |
@@ -162,7 +192,7 @@ src/desktop/          panel.swift — the macOS floating panel
 src/lib/              screen parsing, Herdr calls, config, Telegram, Feishu
 src/hooks/            notify (event hook) + poll (Telegram long-poll, Feishu long connection)
 src/inbound/          replies and delivery back into the pane
-src/actions/          setup, pair, pair-feishu, test, toggle, poll
+src/actions/          setup, pair, pair-feishu, unpair-feishu, test, toggle, poll
 test/
 ```
 

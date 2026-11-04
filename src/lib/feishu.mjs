@@ -82,6 +82,51 @@ async function tenantToken(creds, { fetchImpl, fresh = false } = {}) {
 // one retry with a fresh token, never a loop.
 const STALE_TOKEN_CODES = new Set([99991661, 99991663, 99991668]);
 
+// The answers from tenant_access_token/internal that say the app itself can no
+// longer get a token, so a new bot is the only way forward. That endpoint's
+// page names the platform's 服务端错误码说明 as its error-code reference
+// (https://open.feishu.cn/document/ukTMukTMukTM/ugjM14COyUjL4ITN), and these
+// are the rows there about the app's own state:
+//   10014  app unauthorized    应用状态不可用，检查应用是否停用 (app disabled)
+//   10015  wrong app secret    App Secret 错误 (the secret was reset)
+// Nothing else counts, however permanent it sounds. 21001, an access-control
+// policy refusal, comes back from this same endpoint as HTTP 200 and then goes
+// away by itself (larksuite/openclaw-lark#639); 10003 is only "a parameter is
+// missing or wrong"; 10013 is "get tenant access token fail". Reading those as
+// a dead bot is how a working machine would be sent to scan again, which
+// creates a second bot — the very thing this check is here to prevent.
+const DEAD_APP_CODES = new Set([10014, 10015]);
+
+// Does Feishu still take these credentials? Asked fresh, not from the cache:
+// the question is what Feishu says now. Returns { ok: true } |
+// { ok: false, rejected: true, detail } | { ok: false, rejected: false, detail }.
+//
+// `rejected` means Feishu answered that the app is disabled or its secret is
+// wrong (`DEAD_APP_CODES`), and only that makes a new bot the way forward. Any
+// other answer, a network that cannot reach Feishu, a 5xx or a rate limit says
+// nothing certain about the bot: the caller keeps the pairing and reports.
+export async function feishuVerifyCreds(creds, { fetchImpl } = {}) {
+  let result;
+  try {
+    result = await feishuFetch(
+      `${feishuHosts(creds.brand).open}/open-apis/auth/v3/tenant_access_token/internal`,
+      { body: { app_id: creds.appId, app_secret: creds.appSecret }, fetchImpl },
+    );
+  } catch (error) {
+    return { ok: false, rejected: false, detail: error?.message || String(error), error };
+  }
+  const { json, status } = result;
+  if (json?.code === 0 && json.tenant_access_token) {
+    tokens.set(`${creds.brand}:${creds.appId}`, {
+      token: json.tenant_access_token,
+      exp: Date.now() + Number(json.expire || 7200) * 1000,
+    });
+    return { ok: true };
+  }
+  const detail = `${json?.code ?? `HTTP ${status}`} ${json?.msg || ""}`.trim();
+  return { ok: false, rejected: DEAD_APP_CODES.has(json?.code), detail };
+}
+
 export async function feishuApi(creds, method, path, body, { fetchImpl } = {}) {
   for (let attempt = 0; ; attempt++) {
     const token = await tenantToken(creds, { fetchImpl, fresh: attempt > 0 });

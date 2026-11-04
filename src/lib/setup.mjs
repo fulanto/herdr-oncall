@@ -7,8 +7,22 @@ const PANEL_HINTS = {
     "panel: not built, needs Xcode Command Line Tools (xcode-select --install), then reinstall the plugin",
 };
 
+// The command line that runs one of this plugin's actions.
+export function actionCommand(id) {
+  return `herdr plugin action invoke ${id} --plugin ${PLUGIN_ID}`;
+}
+
 function action(id, indent = "  ") {
-  return `${indent}herdr plugin action invoke ${id} --plugin ${PLUGIN_ID}`;
+  return `${indent}${actionCommand(id)}`;
+}
+
+// Oncall toggled off sends nothing for blocked or done, while `test` still
+// sends its ping: from the outside that reads exactly like "the test arrives
+// but real pings do not". Said wherever a user looks to check the setup.
+export function modeHint(enabled) {
+  return enabled
+    ? []
+    : [`oncall: off, blocked and done send nothing until it is turned back on: ${actionCommand("enable")}`];
 }
 
 // What `ensureIntegrations` did, for the setup output. An agent installed just
@@ -56,11 +70,13 @@ export function setupHints({
   websocket = typeof globalThis.WebSocket === "function",
   nodeVersion = process.version,
   integrations = [],
+  enabled = true,
 }) {
   const lines = [];
   if (PANEL_HINTS[panel]) {
     lines.push(PANEL_HINTS[panel]);
   }
+  lines.push(...modeHint(enabled));
   const oldNode = nodeTooOld(websocket, nodeVersion);
   const telegram = Boolean(token && chatId);
   if (telegram) {
@@ -68,6 +84,10 @@ export function setupHints({
   }
   if (feishu) {
     lines.push(pairedLine("feishu", channels, oldNode));
+    // A reinstall or an update keeps the pairing (.env lives in the config
+    // dir, which Herdr never removes). Scanning again after one is what made a
+    // second bot in Feishu, so the line says there is nothing to redo.
+    lines.push(`  (kept across reinstalls and updates; to pair a new bot, unpair first: ${actionCommand("unpair-feishu")})`);
   }
   if (!telegram && !feishu) {
     const role = panel === "ready" ? "optional, for pings away from the desk" : "needed, nothing else can reach you here";
