@@ -24,6 +24,7 @@ import {
   paneAgentName,
   paneIdFrom,
   panelAvailable,
+  panelFocus,
   pingChannels,
   readJsonEnv,
   readPaneScreen,
@@ -253,7 +254,8 @@ function panelShouldClose() {
 }
 
 // Returns "handled" | "resolved" | "at-pane" | "superseded" | "yielded" |
-// "unavailable" | "timeout" | "dismiss" | "skipped".
+// "unavailable" | "timeout" | "dismiss" | "skipped". No panel takes the
+// keyboard as it opens; panelFocus says whether it can be clicked into.
 async function runPanel({ options, body, timeoutMs, fingerprint }) {
   if (userAtPane(paneId)) {
     console.log(`panel skipped · ${where} · pane is on screen`);
@@ -269,6 +271,7 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
     timeoutMs,
     until: panelShouldClose,
     kind: status === "blocked" ? "blocked" : "report",
+    focus: panelFocus({ status }),
   });
   if (result.kind === "yielded") {
     console.log(`panel yielded · ${where} · a question is already on screen`);
@@ -457,6 +460,11 @@ if (isDone) {
   screen = readScreen();
 }
 await pingRemote(screen, doneBody);
+// A done panel only reports the answer: no field, not on top, and the keyboard
+// stays where it was (panelFocus). It opens whenever a turn ends, which is
+// often while the user is typing somewhere else, and one that took the caret
+// caught the rest of their sentence as a prompt for this pane. A reply still
+// goes in from the pane itself or from the phone ping.
 if (usePanel && isDone && !shouldDebounce(paneId, "panel:done")) {
   await runPanel({ options: [], body: doneBody });
 }

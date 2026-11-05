@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { isTerminalBundle, panelOutranks, panelStderr, showPanel, userAtPane } from "../src/lib/index.mjs";
+import {
+  isTerminalBundle,
+  panelFocus,
+  panelOutranks,
+  panelStderr,
+  showPanel,
+  userAtPane,
+} from "../src/lib/index.mjs";
 
 // A stand-in for the compiled panel: waits until killed, prints nothing, and
 // takes its sleep with it so the test leaves nothing behind.
@@ -24,6 +31,19 @@ function leakyPanel(dir) {
   writeFileSync(path, "#!/bin/sh\nsh -c 'sleep 30' &\nexit 0\n");
   chmodSync(path, 0o755);
   return path;
+}
+
+// A panel that writes the arguments it was started with to `argsFile`, one
+// NUL-terminated entry each, and times out at once.
+function recordingPanel(dir, argsFile) {
+  const path = join(dir, "oncall-panel-recording");
+  writeFileSync(path, `#!/bin/sh\nprintf '%s\\0' "$@" > '${argsFile}'\necho timeout\n`);
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function recordedArgs(argsFile) {
+  return readFileSync(argsFile, "utf8").split("\0").slice(0, -1);
 }
 
 function withPanelState(body) {
@@ -190,5 +210,94 @@ test("a done panel yields to a live blocked panel instead of killing it", { skip
 
     // And the question is still the one standing, answered on its own terms.
     assert.deepEqual(await question, { kind: "resolved", reason: "moved-on" });
+  });
+});
+
+test("a hook's panel never grabs the keyboard as it appears", () => {
+  // Both open whenever the agent gets there, mostly while the user is typing in
+  // another app, and a panel that took the caret caught the rest of their
+  // sentence. A done panel only reports; a question waits for a click, the
+  // next question of a form included.
+  assert.equal(panelFocus({ status: "done" }), "never");
+  assert.equal(panelFocus({ status: "blocked" }), "click");
+});
+
+test("only done is passive, and nothing asks the panel to take the keyboard", { skip: process.platform === "win32" }, async () => {
+  // Clicking to focus is the binary's only way to take the keyboard, so every
+  // panel that is not passive goes out with no switch at all.
+  await withPanelState(async (dir) => {
+    const argsFile = join(dir, "args");
+    const binary = recordingPanel(dir, argsFile);
+    const common = { where: "repo · task · pane 1", body: "the last turn", timeoutMs: 4_000, binary };
+
+    const report = await showPanel({
+      ...common,
+      paneId: "wP:p1",
+      title: "done · Test",
+      kind: "report",
+      focus: panelFocus({ status: "done" }),
+    });
+    assert.deepEqual(report, { kind: "timeout" });
+    const doneArgs = recordedArgs(argsFile);
+    assert.equal(doneArgs[0], "--passive", "the switch comes before the positional arguments");
+    assert.deepEqual(doneArgs.slice(1), ["4", "done · Test", "repo · task · pane 1", "the last turn"]);
+
+    const blocked = { ...common, title: "blocked · Test", kind: "blocked", options: [{ key: "1", label: "Yes" }] };
+    const positional = ["4", "blocked · Test", "repo · task · pane 1", "the last turn", "1. Yes"];
+    await showPanel({ ...blocked, paneId: "wP:p2", focus: panelFocus({ status: "blocked" }) });
+    assert.deepEqual(recordedArgs(argsFile), positional, "a question: buttons and everything else as before");
+
+    // No value of `focus` makes a panel take the keyboard as it opens.
+    await showPanel({ ...blocked, paneId: "wP:p3", focus: "take" });
+    assert.deepEqual(recordedArgs(argsFile), positional);
+  });
+});
+
+test("the test and pairing panels click to focus like the rest", { skip: process.platform === "win32" }, async () => {
+  // They pass no focus and get the default; the QR panel keeps its --qr.
+  await withPanelState(async (dir) => {
+    const argsFile = join(dir, "args");
+    const binary = recordingPanel(dir, argsFile);
+
+    // The same call src/actions/test.mjs makes.
+    await showPanel({
+      title: "test · no pane",
+      where: "Oncall test panel",
+      body: "If you can see this, the desktop panel works.\nNothing pressed here reaches a pane.",
+      options: [{ key: "1", label: "Looks good" }],
+      timeoutMs: 4_000,
+      binary,
+    });
+    assert.deepEqual(recordedArgs(argsFile), [
+      "4",
+      "test · no pane",
+      "Oncall test panel",
+      "If you can see this, the desktop panel works.\nNothing pressed here reaches a pane.",
+      "1. Looks good",
+    ]);
+
+    // The pairing QR panel, as src/actions/pair-feishu.mjs opens it.
+    await showPanel({
+      title: "scan with the Feishu app",
+      where: "Pair Feishu",
+      body: "caption",
+      qr: "https://example.invalid/scan",
+      timeoutMs: 4_000,
+      until: () => undefined,
+      binary,
+    });
+    assert.deepEqual(recordedArgs(argsFile), [
+      "--qr",
+      "https://example.invalid/scan",
+      "4",
+      "scan with the Feishu app",
+      "Pair Feishu",
+      "caption",
+    ]);
+
+    // A report panel without a focus gets the default too: `kind` only decides
+    // who gives way to whom in panels.json.
+    await showPanel({ title: "t", where: "w", body: "b", timeoutMs: 4_000, binary, paneId: "wK:p1", kind: "report" });
+    assert.deepEqual(recordedArgs(argsFile), ["4", "t", "w", "b"]);
   });
 });

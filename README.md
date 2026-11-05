@@ -15,7 +15,8 @@ Agents are fast right up until they need a yes. Then they sit there. If you've g
 Oncall closes that gap:
 
 - **It tells you which task, not just that something happened.** Every notification leads with `repo · branch · pane` — `acme-api · feature/checkout-v2 · pane 2`, not "an agent needs attention".
-- **You answer from where you already are.** The panel floats above whatever you're doing and follows you across Spaces. Click a button, hit Enter for option 1, Cmd+N for option N, or type a free-text answer.
+- **You answer from where you already are.** The panel floats above whatever you're doing and follows you across Spaces, but no Oncall panel takes the keyboard when it appears: whatever you are typing elsewhere stays there. Click a button to answer, or click the panel first, then hit Enter for option 1, Cmd+N for option N, or type a free-text answer.
+- **A finished turn does not interrupt you.** The done panel only shows the agent's answer: no text field, not kept on top, and it never takes the keyboard, so if you are typing somewhere else when a turn ends, your typing stays there. Click back into your window and it goes behind. A follow-up goes in from the pane, or as a reply to the phone ping.
 - **It reaches your phone when the desk doesn't work.** No answer within `BLOCKED_DELAY_SEC` (60s default) and Telegram or Feishu takes over, with the same buttons.
 - **It shuts up when it should.** Nothing pops up while you're already looking at that pane. The panel closes itself the moment you answer in the terminal, or when you switch to the pane yourself.
 
@@ -161,7 +162,7 @@ Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: onc
 | `DESKTOP_PANEL` | `1` | the macOS panel; `0` = phone only |
 | `DESKTOP_PANEL_TIMEOUT_SEC` | `BLOCKED_DELAY_SEC` | how long the panel stays open |
 | `DESKTOP_PANEL_TERMINALS` | empty | extra terminal bundle ids that count as "you're at the pane" |
-| `DESKTOP_PANEL_DEBUG` | empty | `1` logs the screen and window rect the panel was placed on |
+| `DESKTOP_PANEL_DEBUG` | empty | `1` logs the screen and window rect the panel was placed on, and its focus mode, window level, key and active state, when it opens and when it is clicked |
 | `HERDR_TELEGRAM_ENABLED` | `1` | start enabled; toggle with the `toggle` action |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set the host terminal title while on |
 

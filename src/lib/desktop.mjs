@@ -223,10 +223,11 @@ export function closePanelFor(paneId, kind) {
   return true;
 }
 
-// The panel activates its app so an input method will attach to the text field,
-// and macOS answers that by writing input-method chatter to stderr on every
-// open. Logging it verbatim turns a working panel into two error lines per
-// notification, so the known lines are dropped and anything else still surfaces.
+// A panel activates its app once it is clicked, so an input method will attach
+// to the field (a passive one never does), and macOS answers that by writing
+// input-method chatter to stderr. Logging it verbatim turns a working panel
+// into two error lines per notification, so the known lines are dropped and
+// anything else still surfaces.
 const PANEL_NOISE =
   /IMKCFRunLoopWakeUpReliable|TSM AdjustCapsLockLED|_ISSetPhysicalKeyboardCapsLockLED|CFRunLoopWakeUp/;
 
@@ -238,10 +239,29 @@ export function panelStderr(text) {
     .trim();
 }
 
+const PANEL_FOCUS_FLAGS = { never: ["--passive"] };
+
+// How a hook's panel takes the keyboard. No panel takes it as it opens: the
+// binary has no way to, so no caller can forget. Panels appear when an agent
+// gets somewhere, mostly while the user is typing in another app, and one that
+// took the caret as it appeared caught the rest of their sentence. A question
+// ("click") floats and takes the keyboard once it is clicked, and a button
+// answers on the first click; a done panel ("never") only reports.
+export function panelFocus({ status }) {
+  return status === "blocked" ? "click" : "never";
+}
+
 // `until` is polled every `watchMs`; when it returns a truthy value the panel
 // is closed and the result is { kind: "resolved", reason } where reason is
 // that value (a string such as "moved-on" or "at-pane"). `qr` turns the panel
 // into a QR code of that text with the body as its caption, for pairing.
+//
+// `focus` is how the panel takes the keyboard (see panelFocus): "click", the
+// default and every panel's but done's, opens on top and takes it once the
+// panel is clicked; "never" (`--passive`) has no text field, sits at the
+// ordinary window level and never takes it. There is no value that takes the
+// keyboard as the panel opens. It is its own option rather than read off
+// `kind`, which only decides who gives way to whom in panels.json.
 export function showPanel({
   paneId,
   title,
@@ -254,6 +274,7 @@ export function showPanel({
   binary = panelBinaryPath(),
   kind,
   qr,
+  focus = "click",
 }) {
   if (!existsSync(binary)) {
     return Promise.resolve({ kind: "unavailable" });
@@ -263,6 +284,7 @@ export function showPanel({
   }
   const timeoutSec = Math.max(1, Math.round(timeoutMs / 1000));
   const args = [
+    ...(PANEL_FOCUS_FLAGS[focus] ?? []),
     ...(qr ? ["--qr", qr] : []),
     String(timeoutSec),
     title,

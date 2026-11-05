@@ -3,27 +3,54 @@ import CoreImage
 
 // oncall desktop panel.
 //
-// usage: oncall-panel [--qr <text>] <timeout-sec> <title> <where> <body> [option-label ...]
+// usage: oncall-panel [--passive | --qr <text>] <timeout-sec> <title> <where> <body> [option-label ...]
 // stdout (one line): button:<index> | text:<answer> | timeout | dismiss
 //
-// A floating, non-activating panel in the top-right corner of the screen
-// under the mouse. It joins every Space so the user does not have to switch
-// desktops. Enter in the empty field picks the first option; Cmd+1..9 pick
-// options by number; Esc or the close button dismisses.
+// A floating panel in the top-right corner of the screen under the mouse. It
+// joins every Space so the user does not have to switch desktops.
+//
+// No panel takes the keyboard as it opens. Panels appear when an agent gets
+// somewhere, not when the user is ready for them, mostly while they are typing
+// in some other app, and a panel that took the caret as it appeared caught the
+// rest of their sentence (an Enter in it even answered with option 1). So a
+// panel opens on top and takes nothing until it is clicked. A button answers
+// on the first click. A click anywhere else activates the panel and puts the
+// caret in the field, and from then on Enter in the empty field picks the first
+// option, Cmd+1..9 pick options by number, and Esc or the close button
+// dismisses.
+//
+// With --passive it only reports, and never takes the keyboard even when
+// clicked: no text field, an ordinary window level. It shows up over the window
+// in front once, and the next click on that window covers it again. Since it
+// is never key, Esc does not reach it; the close button does. The done panel
+// uses it — a finished turn needs reading, not answering.
 //
 // With --qr the body and the text field give way to a QR code of <text>, with
 // <body> as its caption: the pairing panel. Whoever spawned it closes it once
-// the code has been scanned.
+// the code has been scanned; Esc, once it is clicked, or the close button
+// cancels. --qr is never passive; given both, --qr wins.
+
+enum Focus { case click, never }
 
 var argv = Array(CommandLine.arguments.dropFirst())
+var focusFlag = Focus.click
+if argv.first == "--passive" {
+  focusFlag = .never
+  argv.removeFirst()
+} else if argv.first == "--click-to-focus" {
+  // What every panel does now; accepted so a caller that still says so works.
+  argv.removeFirst()
+}
 var qrText: String? = nil
 if argv.first == "--qr", argv.count >= 2 {
   qrText = argv[1]
   argv.removeFirst(2)
 }
+let focus = qrText == nil ? focusFlag : .click
+let passive = focus == .never
 guard argv.count >= 4 else {
   FileHandle.standardError.write(
-    "usage: oncall-panel [--qr <text>] <timeout> <title> <where> <body> [option ...]\n".data(using: .utf8)!)
+    "usage: oncall-panel [--passive | --qr <text>] <timeout> <title> <where> <body> [option ...]\n".data(using: .utf8)!)
   exit(2)
 }
 let timeout = max(1, Double(argv[0]) ?? 60)
@@ -38,9 +65,29 @@ func finish(_ result: String) -> Never {
   exit(0)
 }
 
+// A panel that has not been clicked yet.
+var awaitingClick = focus == .click
+// Looks at a mouse-down before the window does; true means it was dealt with
+// and must not reach the view. Every panel but a passive one sets one.
+var interceptMouseDown: ((NSEvent) -> Bool)? = nil
+
 final class PanelWindow: NSPanel {
   override func cancelOperation(_ sender: Any?) { finish("dismiss") }
-  override var canBecomeKey: Bool { true }
+  // A panel that may not take the keyboard yet must not be able to become key
+  // at all. A `.nonactivatingPanel` that can become key is made key by AppKit
+  // as soon as launching finishes, with no activate call anywhere, and from
+  // then on it has the keystrokes and the input method while the user's app
+  // still looks active (measured: key and `isActive` both true 0.04 s after
+  // launch). A passive panel pays for it with Esc: the close button, the
+  // timeout or the hook close it.
+  override var canBecomeKey: Bool { !passive && !awaitingClick }
+
+  override func sendEvent(_ event: NSEvent) {
+    if event.type == .leftMouseDown, let intercept = interceptMouseDown, intercept(event) {
+      return
+    }
+    super.sendEvent(event)
+  }
 
   // AppKit otherwise pulls the window onto whichever screen it thinks it
   // belongs to and clamps the frame there. With a display arranged left of the
@@ -94,7 +141,15 @@ final class Handler: NSObject, NSWindowDelegate {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
+// Every panel starts as a background-only process (`.prohibited`), which
+// macOS will not activate at all. Not calling `activate` is not enough as an
+// `.accessory` app: when the frontmost app is the one this process descends
+// from (the terminal Herdr runs in — where the user is most likely typing),
+// launching hands activation over, and the user's app loses the keyboard 0.05 s
+// after the panel appears (measured: `didBecomeActive`, `lsappinfo front`
+// switched to the panel). A background-only process still shows its window and
+// takes mouse clicks. A panel turns into an `.accessory` app when it is clicked.
+app.setActivationPolicy(.prohibited)
 let handler = Handler()
 
 let screen = targetScreen()
@@ -106,7 +161,9 @@ let rowGap: CGFloat = 4
 let margin: CGFloat = 16
 let labelWidth = width - 2 * pad
 let optionsH = CGFloat(options.count) * (rowH + rowGap)
-let fieldH: CGFloat = qrText == nil ? 4 + 26 : 0
+// A QR panel shows a code instead, and a passive one has nothing to answer.
+let wantsField = qrText == nil && !passive
+let fieldH: CGFloat = wantsField ? 4 + 26 : 0
 let qrSide: CGFloat = 220
 let qrBox: CGFloat = qrSide + 32
 let captionFont = NSFont.systemFont(ofSize: 12)
@@ -159,15 +216,25 @@ let captionH = qrText == nil ? 0 : textHeight(body, font: captionFont, width: la
 let bodyH = qrText == nil ? max(48, min(CGFloat(wantedLines) * 15 + 8, roomForBody)) : qrBox + 8 + captionH
 let height = chromeH + bodyH
 
+// Every panel is a `.nonactivatingPanel`, so a click on it (to scroll, to
+// close, on a button, or by accident) is handled without asking for
+// activation; together with the background-only policy and a window that
+// cannot become key, the user's app keeps the keyboard, the menu bar and the
+// input method until the panel is deliberately clicked. A passive panel also
+// sits at the ordinary window level, where the next click on the user's own
+// window covers it; every other panel is something to answer and floats.
+// `.utilityWindow` panels float by default (level 3, `isFloatingPanel` true),
+// so both are set either way rather than left to that default.
+let panelStyle: NSWindow.StyleMask = [.titled, .closable, .utilityWindow, .hudWindow, .nonactivatingPanel]
 let panel = PanelWindow(
   contentRect: NSRect(x: 0, y: 0, width: width, height: height),
-  styleMask: [.titled, .closable, .utilityWindow, .hudWindow],
+  styleMask: panelStyle,
   backing: .buffered,
   defer: false)
 panel.title = "oncall"
-panel.level = .floating
+panel.level = passive ? .normal : .floating
 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-panel.isFloatingPanel = true
+panel.isFloatingPanel = !passive
 panel.hidesOnDeactivate = false
 panel.isReleasedWhenClosed = false
 panel.delegate = handler
@@ -252,11 +319,15 @@ for (index, label) in options.enumerated() {
 }
 
 var field: NSTextField? = nil
-if qrText == nil {
+let answerHint =
+  options.isEmpty ? "type an instruction, Enter to send" : "Enter = option 1, Cmd+N = option N, or type an answer"
+// Until the panel is clicked, typing goes elsewhere; the field says what gets
+// it here instead of promising keys that do not reach it yet.
+let clickHint = options.isEmpty ? "click here, then type an instruction" : "press a button, or click here to type"
+if wantsField {
   y -= (4 + 26)
   let input = NSTextField(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: 26))
-  input.placeholderString =
-    options.isEmpty ? "type an instruction, Enter to send" : "Enter = option 1, Cmd+N = option N, or type an answer"
+  input.placeholderString = awaitingClick ? clickHint : answerHint
   input.font = NSFont.systemFont(ofSize: 12)
   input.target = handler
   input.action = #selector(Handler.submitted(_:))
@@ -264,18 +335,76 @@ if qrText == nil {
   field = input
 }
 
+// The panel's focus state as one debug line, for checking any of this by hand.
+func debugState(_ tag: String) {
+  var responder = panel.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+  if let field, let editor = field.currentEditor(), panel.firstResponder === editor {
+    responder = "field"
+  }
+  debugLog(
+    "\(tag): focus=\(focus) level=\(panel.level.rawValue) floating=\(panel.isFloatingPanel) "
+      + "key=\(panel.isKeyWindow) active=\(NSApp.isActive) field=\(field != nil) responder=\(responder)")
+}
+
 // An input method follows the *active application*, not whichever window holds
 // the caret. As a `.nonactivatingPanel` that never activated, this field took
 // raw keystrokes — fine for `y` or `1` — while the IME session stayed with the
 // terminal, so there was no way to type Chinese, Japanese or Korean into it.
-// Activating is honest about what the panel already does: it takes the caret,
-// and it only opens when you are not at the pane.
-app.activate(ignoringOtherApps: true)
-panel.makeKeyAndOrderFront(nil)
-// Ordering front can still move a window on some macOS versions; re-assert.
-placeTopRight(panel, on: screen, margin: margin)
-if let field {
-  panel.makeFirstResponder(field)
+// So taking the keyboard always means activating, not only becoming key. It
+// happens only on a click on the panel (interceptMouseDown below).
+func takeKeyboard() {
+  app.activate(ignoringOtherApps: true)
+  panel.makeKeyAndOrderFront(nil)
+  if let field {
+    panel.makeFirstResponder(field)
+  }
 }
+
+// Nothing here asks for focus, and nothing can hand it over (background-only
+// above, not key-capable in PanelWindow): the panel is ordered in front once
+// and the keyboard stays where it was.
+panel.orderFrontRegardless()
+placeTopRight(panel, on: screen, margin: margin)
+
+if focus == .click {
+  interceptMouseDown = { event in
+    guard let content = panel.contentView else { return false }
+    // The title bar (close button, dragging) works as it is.
+    guard content.frame.contains(event.locationInWindow) else { return false }
+    // A button answers on the first click, focused or not: there is nothing to
+    // type, and the user's app need not give up the keyboard for it.
+    var view = content.hitTest(event.locationInWindow)
+    while let current = view {
+      if current is NSButton {
+        return false
+      }
+      view = current.superview
+    }
+    if awaitingClick {
+      // The first click anywhere else is for the keyboard: the panel becomes an
+      // app that can be active, takes the caret into the field (a QR panel has
+      // none, but Esc reaches it now), and the click itself is spent on that
+      // (on the body it would hand the caret to the read-only text instead).
+      awaitingClick = false
+      let switched = app.setActivationPolicy(.accessory)
+      field?.placeholderString = answerHint
+      takeKeyboard()
+      debugLog("clicked: policy switched=\(switched)")
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { debugState("focused") }
+      return true
+    }
+    // Back on the panel after clicking elsewhere: it lost its activation with
+    // that click, and without it the input method stays behind.
+    if !NSApp.isActive {
+      app.activate(ignoringOtherApps: true)
+    }
+    return false
+  }
+}
+
+// What the window really ended up as, read once the run loop is going: the
+// activation and key status that launching hands out arrive only then, so a
+// reading taken here, before `app.run()`, says nothing.
+DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { debugState("opened") }
 DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish("timeout") }
 app.run()
