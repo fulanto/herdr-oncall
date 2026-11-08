@@ -31,6 +31,8 @@ const CONTRACT_FIELDS = [
   "roles.supervisor_escalate_sec_codex",
   "roles.supervised_escalate_sec",
   "roles.bare_message_target",
+  "roles.main_done_ping",
+  "roles.main_relay_marker",
   "main_agent.found",
 ];
 
@@ -80,6 +82,8 @@ test("status reports what is set up, never a secret", () => {
     supervisor_escalate_sec_codex: 120,
     supervised_escalate_sec: 600,
     bare_message_target: "main",
+    main_done_ping: "always",
+    main_relay_marker: "【转达】",
   });
   assert.deepEqual(status.main_agent, { found: true, pane_id: "w1Z:p1", agent: "claude", status: "idle" });
   assert.deepEqual(status.drover_env, { present: false, path: "/nowhere/drover.env" });
@@ -128,6 +132,8 @@ test("the status script prints exactly one line of JSON, and no secret", () => {
         "SUPERVISOR_ESCALATE_SEC_CODEX=120",
         "SUPERVISED_ESCALATE_SEC=600",
         "BARE_MESSAGE_TARGET=main",
+        "MAIN_DONE_PING=relay",
+        "MAIN_RELAY_MARKER=【转达】",
       ].join("\n"),
     );
     const herdr = join(dir, "herdr");
@@ -162,6 +168,8 @@ test("the status script prints exactly one line of JSON, and no secret", () => {
     assert.equal(status.ok, true);
     assert.equal(status.drover_env.present, true);
     assert.equal(status.roles.main_agent_name, "drover");
+    assert.equal(status.roles.main_done_ping, "relay");
+    assert.equal(status.roles.main_relay_marker, "【转达】");
     assert.deepEqual(status.main_agent, { found: true, pane_id: "w1Z:p1", agent: "codex", status: "working" });
     assert.equal(status.channels.feishu.paired, true);
     assert.ok(!result.stdout.includes(SECRET));

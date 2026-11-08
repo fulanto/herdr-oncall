@@ -22,6 +22,8 @@ import {
   integrationLines,
   loadDotEnv,
   lookupAgentByName,
+  MAIN_BLOCKED_TITLE,
+  mainBlockedText,
   markBlockedDelay,
   modeEnabled,
   nextDialog,
@@ -55,7 +57,7 @@ import {
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
 import { describeError, ensurePoller } from "../inbound/poller.mjs";
 import { armEscalation } from "../inbound/escalation.mjs";
-import { clearMainTurn, currentMainTurn } from "../inbound/main-inbox.mjs";
+import { mainDonePings, pendingAnswers, sendMainPings } from "../inbound/main-inbox.mjs";
 
 // Every way this hook ends without a ping says so in the plugin log, for the
 // statuses someone waits on. When a colleague's blocked pings stopped reaching
@@ -318,7 +320,10 @@ async function pingRemote(screen, doneBody, { replyTo } = {}) {
   const dialogBacked = status === "blocked" && !hookAuthoritative;
   const options = dialogChoices(screen, { hookAuthoritative: !dialogBacked });
   const fingerprint = dialogBacked ? dialogFingerprint(screen) : undefined;
-  const text = formatMessage(context, event, status, snippet);
+  // With drover, the main session's own dialog reads "主会话在等你确认" and
+  // carries no location line; every other pane's ping is as it always was.
+  const mainLayout = role === "main" && status === "blocked";
+  const text = mainLayout ? mainBlockedText(snippet) : formatMessage(context, event, status, snippet);
   await pingChannels(channels, text, {
     status,
     options,
@@ -326,7 +331,18 @@ async function pingRemote(screen, doneBody, { replyTo } = {}) {
     describe: describeError,
     replyTo,
     sent: (channel, messageId) =>
-      rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options, channel, text }),
+      rememberOutbound({
+        messageId,
+        paneId,
+        status,
+        where,
+        title: mainLayout ? MAIN_BLOCKED_TITLE : title,
+        fingerprint,
+        options,
+        channel,
+        text,
+        layout: mainLayout ? "main" : undefined,
+      }),
   });
 }
 
@@ -385,11 +401,11 @@ if (role === "supervisor" || role === "worker") {
   }
 }
 
-// The main session's turn that a chat message started, if this one is. Its
-// question goes out at once, and its answer goes out as a reply to that
-// message, so the chat reads as a conversation.
-const turn = role === "main" ? currentMainTurn(paneId) : undefined;
-const replyToTurn = turn ? (channel) => (channel === turn.channel ? turn.messageId : undefined) : undefined;
+// A chat message sent into the main session that is still waiting for its
+// answer makes this the user's conversation: a dialog in it is pinged at once,
+// as a reply to that message.
+const waitingChat = role === "main" ? pendingAnswers(paneId).at(-1) : undefined;
+const replyToChat = waitingChat ? (channel) => (channel === waitingChat.channel ? waitingChat.messageId : undefined) : undefined;
 
 if (status === "blocked") {
   // Herdr can fire while the pane is still redrawing, so settle the read first.
@@ -404,10 +420,10 @@ if (status === "blocked") {
   // no buttons anywhere, only free text.
   const panelOptions = dialogChoices(screen, { hookAuthoritative });
   const fingerprint = hookAuthoritative ? undefined : dialogFingerprint(screen);
-  const pingedAtOnce = Boolean(turn);
+  const pingedAtOnce = Boolean(waitingChat);
   if (pingedAtOnce) {
-    console.log(`blocked · ${where} · this turn came from ${turn.channel}, pinging at once`);
-    await pingRemote(screen, undefined, { replyTo: replyToTurn });
+    console.log(`blocked · ${where} · a ${waitingChat.channel} message is waiting for this session, pinging at once`);
+    await pingRemote(screen, undefined, { replyTo: replyToChat });
   }
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
@@ -536,11 +552,10 @@ if (isDone && notifyPlan({ role, status, apiError: Boolean(apiError) }) === "api
 } else {
   screen = readScreen();
 }
-await pingRemote(screen, doneBody, { replyTo: replyToTurn });
-if (turn && isDone) {
-  // That turn is answered; the next one is the terminal's unless another
-  // chat message starts it.
-  clearMainTurn(paneId);
+if (role === "main" && isDone) {
+  await mainDone(doneBody);
+} else {
+  await pingRemote(screen, doneBody);
 }
 // A done panel only reports the answer: no field, not on top, and the keyboard
 // stays where it was (panelFocus). It opens whenever a turn ends, which is
@@ -549,4 +564,28 @@ if (turn && isDone) {
 // goes in from the pane itself or from the phone ping.
 if (usePanel && isDone && !shouldDebounce(paneId, "panel:done")) {
   await runPanel({ options: [], body: doneBody });
+}
+
+// The main session's done, with drover. First the chat messages still waiting
+// for an answer: each one's own turn is found in the session record (not
+// "whatever ended next": a Monitor event can start the next turn before Herdr
+// sees a done) and goes back as a reply to it. Then this turn itself, every
+// time with MAIN_DONE_PING=always, only when it is a relay with =relay. The
+// text goes out bare, without the title and location line: it is the main
+// session talking (src/inbound/main-inbox.mjs, mainDonePings / sendMainPings).
+async function mainDone(turnAnswer) {
+  const pings = await mainDonePings({ paneId, where, turnAnswer, apiErrorText: apiError ? turnAnswer : undefined, settings });
+  if (!pings.length) {
+    console.log(`quiet · main · ${where} · done (not a chat answer or relay)`);
+    return;
+  }
+  if (!channels.length) {
+    console.log(`not sent · ${where} · no paired phone channel in CHANNEL=${channelList().join(",")}`);
+    return;
+  }
+  if (shouldDebounce(paneId, status)) {
+    console.log(`debounced · ${where} · ${status} was pinged for this pane under DEBOUNCE_MS ago`);
+    return;
+  }
+  await sendMainPings(pings, { paneId, where, title, channels, describe: describeError });
 }

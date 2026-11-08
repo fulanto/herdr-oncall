@@ -9,6 +9,9 @@ import {
   escalateAfterSec,
   escalationText,
   lookupAgentByName,
+  MAIN_BLOCKED_TITLE,
+  mainBlockedText,
+  mainDonePlan,
   notifyPlan,
   paneAgentInfo,
   paneRole,
@@ -26,6 +29,8 @@ const DROVER = {
   SUPERVISOR_ESCALATE_SEC_CODEX: "120",
   SUPERVISED_ESCALATE_SEC: "600",
   BARE_MESSAGE_TARGET: "main",
+  MAIN_DONE_PING: "relay",
+  MAIN_RELAY_MARKER: "【转达】",
 };
 
 // `herdr agent get` and `agent list` as herdr 0.9.5 prints them (trimmed): the
@@ -102,6 +107,8 @@ test("the settings fall back to the contract's defaults, and an empty value is u
     supervisorEscalateSecCodex: 120,
     supervisedEscalateSec: 600,
     bareMessageTarget: "last",
+    mainDonePing: "always",
+    mainRelayMarker: "【转达】",
   });
   const odd = roleSettings({
     MAIN_AGENT_NAME: "drover",
@@ -115,6 +122,75 @@ test("the settings fall back to the contract's defaults, and an empty value is u
   assert.equal(odd.supervisorEscalateSec, 60);
   assert.equal(odd.bareMessageTarget, "main");
   assert.equal(roleSettings({ BARE_MESSAGE_TARGET: "somewhere" }).bareMessageTarget, "last");
+  assert.equal(roleSettings(DROVER).mainDonePing, "relay");
+  assert.equal(roleSettings({ MAIN_DONE_PING: "RELAY" }).mainDonePing, "relay");
+  assert.equal(roleSettings({ MAIN_DONE_PING: "sometimes" }).mainDonePing, "always");
+  assert.equal(roleSettings({ MAIN_RELAY_MARKER: "" }).mainRelayMarker, "【转达】");
+  assert.equal(roleSettings({ MAIN_RELAY_MARKER: "[relay]" }).mainRelayMarker, "[relay]");
+});
+
+// contract section 9: what the main session's done sends.
+test("MAIN_DONE_PING=relay sends a chat answer, a relay, an API error, and nothing else", () => {
+  const relay = { mode: "relay", marker: "【转达】" };
+  const question = { id: "a1", answer: "4 个任务都在跑。", channel: "feishu", messageId: "om_q" };
+
+  // A turn that answers nothing and relays nothing: quiet.
+  assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "`orch-oncall` is waiting; nothing changed." }), []);
+  assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "" }), []);
+
+  // The answer to a chat message goes back under it, whichever turn ended now.
+  assert.deepEqual(mainDonePlan({ ...relay, chatAnswers: [question], turnAnswer: "`orch-oncall` is waiting." }), [
+    { kind: "chat", id: "a1", text: "4 个任务都在跑。", replyTo: { channel: "feishu", messageId: "om_q" } },
+  ]);
+
+  // A relay is judged on this turn's closing answer, leading blanks aside; the
+  // marker stays in the text.
+  assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "\n  【转达】目标：orch-voice 等你决定是否推送" }), [
+    { kind: "relay", text: "【转达】目标：orch-voice 等你决定是否推送" },
+  ]);
+  assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "先看一下。【转达】不在开头" }), []);
+
+  // Both in one done: each goes out, but the same text only once.
+  const both = mainDonePlan({ ...relay, chatAnswers: [question], turnAnswer: "【转达】orch-x 完成了" });
+  assert.deepEqual(both.map((ping) => ping.kind), ["chat", "relay"]);
+  const same = mainDonePlan({ ...relay, chatAnswers: [{ ...question, answer: "【转达】orch-x 完成了" }], turnAnswer: "【转达】orch-x 完成了" });
+  assert.deepEqual(same.map((ping) => ping.kind), ["chat"]);
+
+  // An API error: the notice alone, under the message still waiting.
+  assert.deepEqual(
+    mainDonePlan({ ...relay, chatAnswers: [question], turnAnswer: "x", apiErrorText: API_ERROR_NOTICE, waiting: question }),
+    [{ kind: "api-error", text: API_ERROR_NOTICE, replyTo: { channel: "feishu", messageId: "om_q" } }],
+  );
+  assert.deepEqual(mainDonePlan({ ...relay, apiErrorText: API_ERROR_NOTICE }), [{ kind: "api-error", text: API_ERROR_NOTICE }]);
+});
+
+test("MAIN_DONE_PING=always sends every turn, as before", () => {
+  assert.deepEqual(mainDonePlan({ mode: "always", turnAnswer: "`orch-oncall` is waiting." }), [
+    { kind: "done", text: "`orch-oncall` is waiting." },
+  ]);
+  assert.deepEqual(mainDonePlan({ mode: "always", turnAnswer: "" }), [{ kind: "done", text: "finished" }]);
+  // A chat answer that is this very turn goes out once, as the reply.
+  const answer = { id: "a1", answer: "进度如下", channel: "telegram", messageId: "56" };
+  assert.deepEqual(
+    mainDonePlan({ mode: "always", chatAnswers: [answer], turnAnswer: "进度如下" }).map((ping) => ping.kind),
+    ["chat"],
+  );
+  assert.deepEqual(
+    mainDonePlan({ mode: "always", chatAnswers: [answer], turnAnswer: "下一轮" }).map((ping) => ping.kind),
+    ["chat", "done"],
+  );
+});
+
+test("the main session's dialog is headed for what it is, with no location line", () => {
+  assert.deepEqual(mainBlockedText("Do you want to proceed?\n  git push origin main").split("\n"), [
+    MAIN_BLOCKED_TITLE,
+    "",
+    "Do you want to proceed?",
+    "  git push origin main",
+    "",
+    "tap a button, or type another answer",
+  ]);
+  assert.equal(MAIN_BLOCKED_TITLE, "主会话在等你确认");
 });
 
 // proposal 3.3, one row per assertion.

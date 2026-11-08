@@ -9,6 +9,7 @@ import {
   dialogFingerprint,
   envFlag,
   extractStartPayload,
+  mainBlockedText,
   modeEnabled,
   nextDialog,
   optionKeyboard,
@@ -120,6 +121,9 @@ export function rememberOutbound(record, now = Date.now()) {
     // Only a Feishu card is ever rebuilt after it was sent, to swap its buttons
     // for what was pressed; nothing else needs the text kept around.
     text: record.channel === "feishu" && record.options?.length ? record.text : undefined,
+    // "main": the main session's ping with drover, which carries no title or
+    // location line; a form's next question goes out the same way.
+    layout: record.layout,
     at: now,
   };
   writeJson(path, store);
@@ -478,7 +482,7 @@ async function followForm(target, answered, deps) {
     saveScreen("last-blocked-screen.txt", next.screen);
     body = blockedSnippet(next.screen);
   }
-  const message = composeMessage(title, where, "blocked", body);
+  const message = target.layout === "main" ? mainBlockedText(body) : composeMessage(title, where, "blocked", body);
   try {
     const messageId = await channel.ping(message, { options });
     rememberOutbound({
@@ -491,6 +495,7 @@ async function followForm(target, answered, deps) {
       options,
       channel: channel.name,
       text: message,
+      layout: target.layout,
     });
   } catch (error) {
     // The answer itself went through and was acked; only the next question's

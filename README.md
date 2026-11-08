@@ -126,6 +126,8 @@ Every blocked or done event leaves a line in `herdr plugin log list --plugin com
 | `off · …` / `ignored · … · not in NOTIFY_ON=…` | Oncall is toggled off, or `NOTIFY_ON` leaves the status out |
 | `quiet · worker · <name> · <where> · done (supervised)` | with drover: an orchestrator's or a worker's turn ended; the layer above relays it |
 | `escalation armed · worker · <name> · <where> · pings after 600s if nobody answers` | with drover: a dialog the layer above should answer; the poller pings if it is still there then |
+| `quiet · main · <where> · done (not a chat answer or relay)` | with drover and `MAIN_DONE_PING=relay`: the main session's turn was neither |
+| `chat answer · <where> · …` | with drover: what became of a chat message still waiting for its answer (not answered yet, wrote no text) |
 
 With drover, the poller's own log (`poller.log` in the state dir) carries what happens to those dialogs afterwards (`escalated · …`, `escalation cleared · … · dialog gone`, `escalation reset · … · a different dialog is up`) and every chat message for the main session (`main inbox · delivered|stashed|refused · <length> chars · …`, never the text).
 
@@ -154,12 +156,20 @@ Who is who comes from the agent's name in Herdr:
 
 | name | role | blocked | done |
 |---|---|---|---|
-| `MAIN_AGENT_NAME` (`drover`) | the main session | as without drover: panel, then phone after `BLOCKED_DELAY_SEC` | pinged every time |
+| `MAIN_AGENT_NAME` (`drover`) | the main session | as without drover: panel, then phone after `BLOCKED_DELAY_SEC`; headed `主会话在等你确认`, with no location line | with `MAIN_DONE_PING=relay` (drover's setting): only the answer to a chat message, a relay, or an API error; with `always` (the default), every turn |
 | starts with `SUPERVISOR_PREFIX` (`orch-`) | orchestrator | no panel, no ping; pinged only if the same dialog is still waiting after `SUPERVISOR_ESCALATE_SEC` (5 min; 2 min, `SUPERVISOR_ESCALATE_SEC_CODEX`, when the main session runs Codex, which has nobody watching its orchestrators) | not pinged: the main session relays it |
 | any other name | worker | the same, after `SUPERVISED_ESCALATE_SEC` (10 min) | not pinged: its orchestrator relays it |
 | no name | a pane you opened | as without drover | as without drover |
 
-An escalation says who is stuck, for how long, where, and who normally answers (`升级 · worker hca-e2e 卡在确认框 10 分钟`), and carries the dialog's buttons like any blocked ping. It goes out once per dialog; a different dialog starts the clock over, and one that leaves the screen is forgotten. With no phone channel paired it opens the panel instead. The poller keeps the clock, so nothing waits inside a hook. When the main session's turn ends on an API error, its done ping says so and asks you to answer `继续`.
+An escalation says who is stuck, for how long, where, and who normally answers (`升级 · worker hca-e2e 卡在确认框 10 分钟`), and carries the dialog's buttons like any blocked ping. It goes out once per dialog; a different dialog starts the clock over, and one that leaves the screen is forgotten. With no phone channel paired it opens the panel instead. The poller keeps the clock, so nothing waits inside a hook. A dialog only counts while Herdr does not say the pane is `working`: an agent can print dialog text of its own (reading a log of approvals, say), and with only its spinner below, that text looks exactly like a dialog waiting.
+
+**What the main session's done sends.** The chat is for approvals and instructions, not for relaying every turn: a main session that watches its orchestrators takes a turn for each of their events, and pinging all of them buried the answers you asked for. So with `MAIN_DONE_PING=relay`, a done sends only:
+
+- the answer to a chat message you sent it, as a reply under that message. The turn is found in the agent's own session record, by your message: the main session can be woken by an orchestrator's event the moment it has answered you and go straight into the next turn, with no done in between, so "whatever ended at the next done" would be the wrong turn. A turn still in progress waits for a later done;
+- a relay: a turn whose closing answer (the text that ends the turn, not something said before a tool call) starts with `MAIN_RELAY_MARKER` (`【转达】`), which is how drover's main session hands on an orchestrator's "needs you";
+- a turn cut short by an API error, with a note to answer `继续`.
+
+Everything else is quiet (`quiet · main · … · done (not a chat answer or relay)` in the plugin log); the done panel on the Mac opens as before. These pings carry only the main session's words: no `done · Claude` title and no location line.
 
 **The chat is a line to the main session** (`BARE_MESSAGE_TARGET=main`). A message that quotes no ping goes to the main session, found by name every time; quoting a ping or tapping a button answers that ping's pane, as always. What goes in is prefixed `[飞书] ` (Telegram: `[Telegram] `) and stripped of control characters, because the terminal reads the input box as keys: a leading `!` would run a shell command and a leading `/` a slash command, and an ESC is a keypress. Up to 2000 characters; newlines are kept. When the main session cannot take it right now, the message waits in the poller and goes in by itself later, and the reply says why:
 
@@ -168,7 +178,7 @@ An escalation says who is stuck, for how long, where, and who normally answers (
 - Codex is in the middle of a turn: a message would cut that turn short, so it waits until Codex stops (Claude Code queues it itself and takes it next);
 - the main session has no name for a moment (it is restarting): up to 30 seconds, then `没找到主会话…`.
 
-A message still waiting after 30 minutes is mentioned once and kept. The main session's answer to a turn you started from the chat arrives as a reply under your message, and a dialog it raises in that turn is pinged at once, without the panel's wait.
+A message still waiting after 30 minutes is mentioned once and kept. A dialog the main session raises while one of your chat messages still waits for its answer is pinged at once, without the panel's wait.
 
 Commands, handled by Oncall and never typed into a pane: `/help`, `/off` and `/on` (the same switch as the `toggle` action; while off, nothing from the chat reaches a pane, buttons included), and `/send`. `/off` only stops Oncall from bothering you; it does not protect anything, since whoever can send `/off` can send `/on`. **Anyone who gets into the paired Feishu (or Telegram) account can drive the main session like you can**, including pushing code: there is no extra confirmation for what comes from the chat. Unpair (`unpair-feishu`) if the account is lost.
 
@@ -214,6 +224,8 @@ drover's keys, written to `drover.env` by drover's installer (see [With drover](
 | `SUPERVISOR_ESCALATE_SEC_CODEX` | `120` | the same, when the main session runs Codex |
 | `SUPERVISED_ESCALATE_SEC` | `600` | how long a worker's dialog may wait before you are pinged |
 | `BARE_MESSAGE_TARGET` | `last` | where a chat message that quotes no ping goes: `last` = the pane of the latest ping, `main` = the main session |
+| `MAIN_DONE_PING` | `always` | what the main session's done sends: `always` = every turn; `relay` = only chat answers, relays and API errors |
+| `MAIN_RELAY_MARKER` | `【转达】` | the opening that makes a main-session turn a relay |
 
 Toggle it off without uninstalling:
 

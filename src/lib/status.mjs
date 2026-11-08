@@ -60,6 +60,8 @@ export function oncallStatus({
       supervisor_escalate_sec_codex: settings.supervisorEscalateSecCodex,
       supervised_escalate_sec: settings.supervisedEscalateSec,
       bare_message_target: settings.bareMessageTarget,
+      main_done_ping: settings.mainDonePing,
+      main_relay_marker: settings.mainRelayMarker,
     },
     main_agent: mainAgent,
     ...extra,

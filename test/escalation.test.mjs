@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { dialogFingerprint, roleSettings } from "../src/lib/index.mjs";
+import { dialogFingerprint, roleSettings, screenHasLiveDialog } from "../src/lib/index.mjs";
 import { armEscalation, checkEscalations, readEscalations } from "../src/inbound/escalation.mjs";
 
 const DROVER = roleSettings({
@@ -54,7 +54,7 @@ function withState(body) {
 
 // The poller's view of the world, all of it fake: what each pane shows, which
 // panes exist, what was pinged and what was logged.
-function world({ screens, closed = [], mainKind = "claude" }) {
+function world({ screens, closed = [], mainKind = "claude", status = "blocked" }) {
   const pinged = [];
   const panels = [];
   const lines = [];
@@ -62,7 +62,7 @@ function world({ screens, closed = [], mainKind = "claude" }) {
     if (args[0] === "pane" && args[1] === "get") {
       return closed.includes(args[2])
         ? { status: 1, stdout: "", stderr: '{"error":{"code":"pane_not_found","message":"pane not found"}}' }
-        : { status: 0, stdout: JSON.stringify({ result: { pane: { agent_status: "blocked" } } }) };
+        : { status: 0, stdout: JSON.stringify({ result: { pane: { agent_status: typeof status === "function" ? status() : status } } }) };
     }
     if (args[0] === "agent" && args[1] === "list") {
       return {
@@ -222,5 +222,63 @@ test(
     assert.equal(off.pinged.length, 0);
     // Turned back on, the dialog that is still waiting goes out.
     assert.deepEqual((await off.pass(t0 + 11 * MINUTE)).at(-1), { paneId: "w7P:p1", outcome: "pinged" });
+  }),
+);
+
+// Seen live: a worker reading a session record printed an approval's text, and
+// with only its spinner and the prompt box below, the screen read as a live
+// dialog. The poller reset the worker's clock twice ("a different dialog is
+// up") while Herdr said, rightly, that the worker was working.
+const QUOTED = [
+  "⏺ 会话记录里有一个确认框：",
+  "",
+  "  Do you want to proceed?",
+  "  ❯ 1. Yes",
+  "    2. No",
+  "",
+  "✶ Reading… (12s · esc to interrupt)",
+  "",
+  "────────────────────────────────────────",
+  "❯ ",
+  "────────────────────────────────────────",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+].join("\n");
+
+test(
+  "dialog text the agent printed itself is not a dialog while Herdr says it is working",
+  withState(async () => {
+    // The premise: the screen alone cannot tell.
+    assert.equal(screenHasLiveDialog(QUOTED), true);
+    const t0 = 7_000_000;
+    arm("w7T:p1", "worker", "ho-roles", DIALOG, t0);
+    arm("w7W:p1", "worker", "dr-oncall", QUOTED, t0);
+    const working = world({ screens: { "w7T:p1": QUOTED, "w7W:p1": QUOTED }, status: "working" });
+    // Neither reset nor counted: the approved dialog's record is cleared, and
+    // so is one armed on that very screen, ten minutes on or not.
+    assert.deepEqual(await working.pass(t0 + 11 * MINUTE), [
+      { paneId: "w7T:p1", outcome: "cleared" },
+      { paneId: "w7W:p1", outcome: "cleared" },
+    ]);
+    assert.equal(working.pinged.length, 0);
+    assert.deepEqual(readEscalations(), {});
+    assert.ok(!working.lines.some((line) => line.startsWith("escalation reset")));
+  }),
+);
+
+test(
+  "the same screen with Herdr saying blocked, done or nothing still counts as the dialog",
+  withState(async () => {
+    const t0 = 8_000_000;
+    arm("w7W:p1", "worker", "dr-oncall", QUOTED, t0);
+    assert.deepEqual(await world({ screens: { "w7W:p1": QUOTED }, status: "blocked" }).pass(t0 + 5 * MINUTE), [
+      { paneId: "w7W:p1", outcome: "waiting" },
+    ]);
+    // done / idle with a dialog drawn is Herdr missing it.
+    assert.deepEqual(await world({ screens: { "w7W:p1": QUOTED }, status: "done" }).pass(t0 + 6 * MINUTE), [
+      { paneId: "w7W:p1", outcome: "waiting" },
+    ]);
+    const unknown = world({ screens: { "w7W:p1": QUOTED }, status: undefined });
+    assert.deepEqual(await unknown.pass(t0 + 10 * MINUTE), [{ paneId: "w7W:p1", outcome: "pinged" }]);
+    assert.equal(readEscalations()["w7W:p1"].startedAt, t0);
   }),
 );

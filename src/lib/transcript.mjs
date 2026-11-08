@@ -381,6 +381,184 @@ export async function sessionAnswer(
 }
 
 // ---------------------------------------------------------------------------
+// Done: the answer to one chat message.
+//
+// A message sent in from the chat starts a turn of its own, and the answer the
+// user is waiting for is that turn's, not whichever turn happened to end at
+// the next done. Those are often different: a main session that watches its
+// orchestrators with Monitor is woken by their events, and when one arrives as
+// the chat's turn ends, Claude Code goes straight on into the next turn with no
+// done in between (a real one: "[飞书] 进度怎么样" was answered with a progress
+// summary, then a task-notification turn answered "orch-oncall is waiting…",
+// and the ping carried that). So the turn is found in the session record by the
+// message itself.
+
+function blockTexts(content) {
+  if (typeof content === "string") {
+    return [content];
+  }
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .filter((block) => block && typeof block.text === "string" && (block.type === "text" || block.type === "input_text"))
+    .map((block) => block.text);
+}
+
+function squashSpace(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
+// Did this record's text come from the message that was typed in? Compared
+// with the whitespace collapsed, on the first 200 characters, so a long paste
+// still matches however the agent stored its tail.
+function carries(texts, sent) {
+  const needle = squashSpace(sent).slice(0, 200);
+  return Boolean(needle) && texts.some((text) => squashSpace(text).includes(needle));
+}
+
+function recordTime(record) {
+  const ms = Date.parse(record?.timestamp ?? "");
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+// A record written before the message was typed cannot be it. The agent
+// writes the record after it took the text, on the same clock, so only a
+// little slack is needed; more would let an identical message sent seconds
+// earlier claim the answer.
+function notBefore(record, after) {
+  const at = recordTime(record);
+  return after === undefined || at === undefined || at >= after - 2000;
+}
+
+// Input that starts a turn, from anyone: the user at the terminal, a queued
+// message, a Monitor or background task notification. Not a tool's result,
+// and not the reminders Claude Code tucks into a user record of its own.
+function claudeUserInput(record) {
+  if (record.type !== "user" || record.isSidechain || record.isMeta) {
+    return false;
+  }
+  return blockTexts(record.message?.content).some((text) => text.trim() && !text.trimStart().startsWith("<system-reminder>"));
+}
+
+function claudeText(record) {
+  return blockTexts(record.message?.content).join("\n").trim();
+}
+
+// { state: "answered", answer } | { state: "open" } | { state: "missing" } |
+// { state: "empty" }. Claude Code: the user record that carries `text` (the
+// first one written after `after`), then the conversation up to the next
+// input that starts a turn. With that next input already there, the answer is
+// the last text written before it, preferring the text that ended a turn. With
+// nothing after it yet, the turn is over only once it ends on `end_turn` text.
+export function claudeChatAnswer(records, { text, after } = {}) {
+  const chat = records.filter((record) => (record.type === "assistant" || record.type === "user") && !record.isSidechain);
+  const start = chat.findIndex(
+    (record) => record.type === "user" && notBefore(record, after) && carries(blockTexts(record.message?.content), text),
+  );
+  if (start < 0) {
+    return { state: "missing" };
+  }
+  let end = chat.length;
+  for (let i = start + 1; i < chat.length; i++) {
+    if (claudeUserInput(chat[i])) {
+      end = i;
+      break;
+    }
+  }
+  const turn = chat.slice(start + 1, end);
+  const ended = claudeLastAnswer(turn);
+  if (ended) {
+    return { state: "answered", answer: capAnswer(ended) };
+  }
+  if (end === chat.length) {
+    return { state: "open" };
+  }
+  // Cut short by the next input before any text ended a turn: what it last
+  // said is still the closest thing to an answer there is.
+  for (let i = turn.length - 1; i >= 0; i--) {
+    if (turn[i].type === "assistant") {
+      const said = claudeText(turn[i]);
+      if (said) {
+        return { state: "answered", answer: capAnswer(said) };
+      }
+    }
+  }
+  return { state: "empty" };
+}
+
+// Codex: the user message that carries `text`, then the task it belongs to,
+// which is the one the next `task_complete` closes. A message that came in
+// while a task was running joins that task (measured on Codex 0.166: the task
+// already under way was answered as one), and the same rule finds it. A new
+// `task_started` first means the task ended without completing.
+export function codexChatAnswer(records, { text, after } = {}) {
+  const start = records.findIndex((record) => {
+    const payload = record?.payload ?? {};
+    const isUser =
+      (record?.type === "response_item" && payload.type === "message" && payload.role === "user") ||
+      (record?.type === "event_msg" && payload.type === "user_message");
+    if (!isUser || !notBefore(record, after)) {
+      return false;
+    }
+    const texts = payload.type === "user_message" ? [String(payload.message ?? "")] : blockTexts(payload.content);
+    return carries(texts, text);
+  });
+  if (start < 0) {
+    return { state: "missing" };
+  }
+  for (let i = start + 1; i < records.length; i++) {
+    const type = records[i]?.type === "event_msg" ? records[i].payload?.type : undefined;
+    if (type === "task_complete") {
+      const answer = records[i].payload.last_agent_message;
+      return typeof answer === "string" && answer.trim() ? { state: "answered", answer: capAnswer(answer.trim()) } : { state: "empty" };
+    }
+    if (type === "task_started" || type === "turn_aborted") {
+      return { state: "empty" };
+    }
+  }
+  return { state: "open" };
+}
+
+export function chatAnswer(agent, records, options) {
+  if (agent === "codex") {
+    return codexChatAnswer(records, options);
+  }
+  if (agent === "claude") {
+    return claudeChatAnswer(records, options);
+  }
+  return { state: "missing" };
+}
+
+// The answers to the chat messages still waiting for one, from the pane's
+// session record: [{ id, state, answer? }], or { noSession: true } when the
+// pane's session cannot be found at all. A done event can land a moment
+// before the turn is written, so a turn still open is read again a few times.
+export async function sessionChatAnswers(
+  paneId,
+  pending,
+  { run = runHerdr, env = process.env, attempts = 6, delayMs = 500, wait = sleep } = {},
+) {
+  const session = paneSession(paneId, { run, env });
+  const path = sessionFile(session, env);
+  if (!path) {
+    return { noSession: true, answers: [] };
+  }
+  let answers = [];
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) {
+      await wait(delayMs);
+    }
+    const records = readSessionTail(path);
+    answers = pending.map((item) => ({ id: item.id, ...chatAnswer(session.agent, records, { text: item.text, after: item.deliveredAt }) }));
+    if (!answers.some((answer) => answer.state === "open")) {
+      break;
+    }
+  }
+  return { noSession: false, answers };
+}
+
+// ---------------------------------------------------------------------------
 // Blocked: what the dialog is about.
 //
 // A permission dialog is about a tool call the agent has already made: the

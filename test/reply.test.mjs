@@ -567,6 +567,36 @@ function tapOn(messageId, data = "1") {
   };
 }
 
+test("the main session's form follows on as the main session's card: no location line", async () => {
+  await withStateDir(async () => {
+    rememberOutbound({
+      messageId: 7,
+      paneId: "w1Z:p1",
+      status: "blocked",
+      where: "Git-Repo · pane 1",
+      title: "主会话在等你确认",
+      fingerprint: dialogFingerprint(TAB_ONE),
+      options: [],
+      layout: "main",
+    });
+    const sent = [];
+    const result = await handleTelegramUpdate(tapOn(7), {
+      token: "t",
+      chatId: "55",
+      send: telegramRecorder(sent),
+      answer: async () => {},
+      wait: async () => {},
+      run: steppingPane({ before: TAB_ONE, after: TAB_TWO, statusBefore: "idle", statusAfter: "idle", calls: [] }),
+    });
+    assert.equal(result.followed, true);
+    const ping = sent[1];
+    assert.match(ping.text, /^主会话在等你确认\n\n/);
+    assert.ok(!ping.text.includes("Git-Repo · pane 1"));
+    assert.match(ping.text, /What should happen to it\?/);
+    assert.equal(lookupOutbound(ping.id).layout, "main");
+  });
+});
+
 test("answering a form's question from telegram pings the next one", async () => {
   await withStateDir(async () => {
     rememberOutbound({

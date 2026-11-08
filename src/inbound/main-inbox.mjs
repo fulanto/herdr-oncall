@@ -2,20 +2,34 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   bareToMain,
+  channelPaired,
   dialogQuestion,
   lookupAgentByName,
+  mainDonePlan,
   modeEnabled,
+  pingChannels,
   readPaneScreen,
   readPaneScreenAnsi,
   roleSettings,
   rolesActive,
   runHerdr,
   screenHasOpenMenu,
+  sendRemote,
+  sessionChatAnswers,
   setMode,
   sleep,
   stateDir,
 } from "../lib/index.mjs";
-import { NO_TARGET, finishDelivery, herdrErrorText, herdrFailed, isAgentBlockedError, lastOutbound, lookupOutbound } from "./reply.mjs";
+import {
+  NO_TARGET,
+  finishDelivery,
+  herdrErrorText,
+  herdrFailed,
+  isAgentBlockedError,
+  lastOutbound,
+  lookupOutbound,
+  rememberOutbound,
+} from "./reply.mjs";
 
 // With drover, the paired chat is a line to the main session: a message that
 // quotes no ping goes to the agent named MAIN_AGENT_NAME, as if the user had
@@ -38,7 +52,7 @@ export const MAX_CHARS = 2000;
 // waits this long before it is turned away.
 export const ABSENT_GRACE_MS = 30_000;
 export const LATE_NOTICE_MS = 30 * 60_000;
-const TURN_TTL_MS = 6 * 60 * 60_000;
+const PENDING_TTL_MS = 6 * 60 * 60_000;
 export const INBOX_CHECK_MS = 5000;
 
 export const OFF_NOTICE = "oncall 已关闭，发 /on 打开";
@@ -263,15 +277,18 @@ function waitingReason(verdict, settings) {
 }
 
 // ---------------------------------------------------------------------------
-// The files: the inbox of messages waiting for the main session, and the turn
-// a chat message started, which the notify hook answers under that message.
+// The files: the inbox of messages waiting to go in, and the messages that
+// went in and still wait for their answer, which the notify hook finds in the
+// session record and sends as a reply to each.
 
 function inboxPath() {
   return join(stateDir(), "main-inbox.json");
 }
 
-function turnPath() {
-  return join(stateDir(), "main-turn.json");
+// Every chat message that went into the main session and has not had its
+// answer sent back yet (the notify hook finds it in the session record).
+function pendingPath() {
+  return join(stateDir(), "main-pending.json");
 }
 
 function readJson(path, fallback) {
@@ -296,24 +313,35 @@ function writeInbox(items) {
   writeJson(inboxPath(), items);
 }
 
-export function rememberMainTurn({ paneId, channel, messageId }, now = Date.now()) {
-  writeJson(turnPath(), { paneId, channel, messageId: messageId === undefined ? undefined : String(messageId), deliveredAt: now });
+export function rememberPendingAnswer({ id, paneId, channel, messageId, text }, now = Date.now()) {
+  const items = livePending(now);
+  items.push({
+    id: id ?? `${now}-${Math.random().toString(36).slice(2, 8)}`,
+    paneId,
+    channel,
+    messageId: messageId === undefined || messageId === null ? undefined : String(messageId),
+    text,
+    deliveredAt: now,
+  });
+  writeJson(pendingPath(), items);
 }
 
-// The chat message the main session's current turn answers, if one started it.
-export function currentMainTurn(paneId, now = Date.now()) {
-  const turn = readJson(turnPath(), undefined);
-  if (!turn?.paneId || turn.paneId !== paneId || !(now - Number(turn.deliveredAt) < TURN_TTL_MS)) {
-    return undefined;
-  }
-  return turn;
+function livePending(now) {
+  const items = readJson(pendingPath(), []);
+  return (Array.isArray(items) ? items : []).filter((item) => item?.paneId && now - Number(item.deliveredAt) < PENDING_TTL_MS);
 }
 
-export function clearMainTurn(paneId) {
-  const turn = readJson(turnPath(), undefined);
-  if (turn && (!paneId || turn.paneId === paneId)) {
-    writeJson(turnPath(), {});
-  }
+// The chat messages sent into this pane that are still waiting for their
+// answer, oldest first. One older than PENDING_TTL_MS is given up on.
+export function pendingAnswers(paneId, now = Date.now()) {
+  return livePending(now).filter((item) => item.paneId === paneId);
+}
+
+export function removePendingAnswer(id, now = Date.now()) {
+  writeJson(
+    pendingPath(),
+    livePending(now).filter((item) => item.id !== id),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +406,7 @@ export async function routeToMain(raw, { channel, messageId, settings = roleSett
   if (verdict.state === "ready" || verdict.state === "working") {
     const typed = typeIntoMain(verdict.main.paneId, item, run);
     if (typed.outcome === "sent") {
-      rememberMainTurn({ paneId: verdict.main.paneId, channel: item.channel, messageId: item.messageId }, now);
+      rememberPendingAnswer({ id: item.id, paneId: verdict.main.paneId, channel: item.channel, messageId: item.messageId, text: item.text }, now);
       log(logLine("delivered", item, verdict.main.status || verdict.state));
       await channel.reply(deliveredNotice(verdict.state, item, now));
       return { ok: true, delivered: true, paneId: verdict.main.paneId, state: verdict.state };
@@ -444,7 +472,7 @@ export async function drainInbox({
     const typed = typeIntoMain(verdict.main.paneId, first, run);
     if (typed.outcome === "sent") {
       writeInbox(rest);
-      rememberMainTurn({ paneId: verdict.main.paneId, channel: first.channel, messageId: first.messageId }, now);
+      rememberPendingAnswer({ id: first.id, paneId: verdict.main.paneId, channel: first.channel, messageId: first.messageId, text: first.text }, now);
       log(logLine("delivered", first, `${verdict.main.status || verdict.state}, after waiting`));
       await say(first, deliveredNotice(verdict.state, first, now));
       return { delivered: first.id };
@@ -622,6 +650,102 @@ export async function routeChatMessage(
     return routeToMain(text, { channel, messageId, settings, run, now, log });
   }
   return finishDelivery({ ...latest, explicit: false }, text, { ...deps, run, wait, channel });
+}
+
+// ---------------------------------------------------------------------------
+// The main session's done (called by the notify hook).
+
+// What this done sends: the answers to chat messages still waiting for one,
+// each found in its own turn of the session record (not "whatever ended
+// next": a Monitor event can start the next turn before Herdr sees a done),
+// then this turn per MAIN_DONE_PING (see mainDonePlan). An answer whose turn
+// wrote no text is dropped from the waiting list; one whose turn is still open
+// waits for the next done.
+export async function mainDonePings({
+  paneId,
+  where,
+  turnAnswer,
+  apiErrorText,
+  settings = roleSettings(),
+  now = Date.now(),
+  run = runHerdr,
+  env = process.env,
+  wait,
+  log = console.log,
+}) {
+  const pending = pendingAnswers(paneId, now);
+  const answers = [];
+  if (!apiErrorText && pending.length) {
+    const found = await sessionChatAnswers(paneId, pending, { run, env, ...(wait ? { wait } : {}) });
+    if (found.noSession) {
+      // No session record to look in: this turn's answer is the best there
+      // is, and it goes to the oldest message, as the first version did.
+      if (turnAnswer) {
+        answers.push({ ...pending[0], answer: turnAnswer });
+      }
+      log(`chat answer · ${where} · no session record to look in, sending this turn's answer`);
+    } else {
+      for (const item of found.answers) {
+        const record = pending.find((entry) => entry.id === item.id);
+        const which = `${record.channel} message ${record.messageId}`;
+        if (item.state === "answered") {
+          answers.push({ ...record, answer: item.answer });
+        } else if (item.state === "empty") {
+          removePendingAnswer(item.id, now);
+          log(`chat answer · ${where} · the turn of ${which} wrote no text, nothing to send`);
+        } else {
+          log(`chat answer · ${where} · ${which}: its turn is ${item.state === "open" ? "not answered yet" : "not in the session record yet"}, waiting`);
+        }
+      }
+    }
+  }
+  return mainDonePlan({
+    mode: settings.mainDonePing,
+    marker: settings.mainRelayMarker,
+    chatAnswers: answers,
+    turnAnswer,
+    apiErrorText,
+    waiting: pending.at(-1),
+  });
+}
+
+const PING_KINDS = {
+  chat: "the answer to a chat message",
+  relay: "a relay",
+  done: "this turn (MAIN_DONE_PING=always)",
+  "api-error": "the turn ended on an API error",
+};
+
+// Sends what mainDonePings decided, bare: the main session's own words, no
+// title and no location line. A chat answer goes back, as a reply, to the
+// chat the question came from; the rest go to every channel CHANNEL picks.
+// A chat message leaves the waiting list once its answer went out.
+export async function sendMainPings(
+  pings,
+  { paneId, where, title, channels, send = sendRemote, paired = channelPaired, describe, log = console.log, error = console.error, now = Date.now() },
+) {
+  for (const ping of pings) {
+    const origin = ping.replyTo?.channel;
+    const targets = origin && paired(origin) ? [origin] : channels;
+    let delivered = false;
+    log(`done · ${where} · ${PING_KINDS[ping.kind]}${ping.replyTo ? `, as a reply to ${origin} message ${ping.replyTo.messageId}` : ""}`);
+    await pingChannels(targets, ping.text, {
+      status: "done",
+      where,
+      send,
+      log,
+      error,
+      ...(describe ? { describe } : {}),
+      replyTo: (channel) => (ping.replyTo && channel === origin ? ping.replyTo.messageId : undefined),
+      sent: (channel, messageId) => {
+        delivered = true;
+        rememberOutbound({ messageId, paneId, status: "done", where, title, channel, text: ping.text, layout: "main" }, now);
+      },
+    });
+    if (ping.kind === "chat" && delivered) {
+      removePendingAnswer(ping.id, now);
+    }
+  }
 }
 
 // The poller's loop around drainInbox, behind the same queue as every other

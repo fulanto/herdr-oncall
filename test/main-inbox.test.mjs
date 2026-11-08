@@ -8,12 +8,12 @@ import {
   ABSENT_GRACE_MS,
   LATE_NOTICE_MS,
   OFF_NOTICE,
-  clearMainTurn,
-  currentMainTurn,
   drainInbox,
   helpText,
   inputDraft,
+  pendingAnswers,
   readInbox,
+  removePendingAnswer,
   routeToMain,
   sanitizeForAgent,
 } from "../src/inbound/main-inbox.mjs";
@@ -165,11 +165,16 @@ test(
     assert.equal(outcome.delivered, true);
     assert.deepEqual(herdr.prompts(), [[MAIN, "[飞书] 进度怎么样"]]);
     assert.deepEqual(chat.said, ["已送达主会话"]);
-    assert.deepEqual(currentMainTurn(MAIN, 2000), { paneId: MAIN, channel: "feishu", messageId: "om_user_1", deliveredAt: 1000 });
-    // Not some other pane's turn, and gone once answered.
-    assert.equal(currentMainTurn("w75:p4", 2000), undefined);
-    clearMainTurn(MAIN);
-    assert.equal(currentMainTurn(MAIN, 2000), undefined);
+    const [waiting] = pendingAnswers(MAIN, 2000);
+    assert.deepEqual(
+      { ...waiting, id: undefined },
+      { id: undefined, paneId: MAIN, channel: "feishu", messageId: "om_user_1", text: "[飞书] 进度怎么样", deliveredAt: 1000 },
+    );
+    // Not some other pane's, gone once answered, and given up on after 6 hours.
+    assert.deepEqual(pendingAnswers("w75:p4", 2000), []);
+    assert.equal(pendingAnswers(MAIN, 1000 + 6 * 60 * 60_000).length, 0);
+    removePendingAnswer(waiting.id, 2000);
+    assert.deepEqual(pendingAnswers(MAIN, 2000), []);
   }),
 );
 
@@ -288,7 +293,7 @@ test(
     assert.ok(drained.delivered);
     assert.deepEqual(herdr.prompts(), [[MAIN, "[飞书] 进度？"]]);
     assert.deepEqual(chat.said, ["已送达主会话"]);
-    assert.equal(currentMainTurn(MAIN, 7000).messageId, "om_2");
+    assert.equal(pendingAnswers(MAIN, 7000)[0].messageId, "om_2");
   }),
 );
 
@@ -498,7 +503,9 @@ test(
     );
     assert.deepEqual(herdr.prompts(), [[MAIN, "[Telegram] 进度怎么样"]]);
     assert.equal(said.at(-1), "已送达主会话");
-    assert.equal(currentMainTurn(MAIN).channel, "telegram");
-    assert.equal(currentMainTurn(MAIN).messageId, "56");
+    const [waiting] = pendingAnswers(MAIN);
+    assert.equal(waiting.channel, "telegram");
+    assert.equal(waiting.messageId, "56");
+    assert.equal(waiting.text, "[Telegram] 进度怎么样");
   }),
 );

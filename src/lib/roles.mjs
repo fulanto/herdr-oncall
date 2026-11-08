@@ -16,6 +16,8 @@ export const ROLE_DEFAULTS = {
   supervisorEscalateSecCodex: 120,
   supervisedEscalateSec: 600,
   bareMessageTarget: "last",
+  mainDonePing: "always",
+  mainRelayMarker: "【转达】",
 };
 
 function textSetting(env, key, fallback) {
@@ -36,6 +38,7 @@ function secondsSetting(env, key, fallback) {
 // the .env files and drover.env. An empty value counts as unset.
 export function roleSettings(env = process.env) {
   const target = textSetting(env, "BARE_MESSAGE_TARGET", ROLE_DEFAULTS.bareMessageTarget).toLowerCase();
+  const donePing = textSetting(env, "MAIN_DONE_PING", ROLE_DEFAULTS.mainDonePing).toLowerCase();
   return {
     mainAgentName: textSetting(env, "MAIN_AGENT_NAME", ROLE_DEFAULTS.mainAgentName),
     supervisorPrefix: textSetting(env, "SUPERVISOR_PREFIX", ROLE_DEFAULTS.supervisorPrefix),
@@ -47,6 +50,8 @@ export function roleSettings(env = process.env) {
     ),
     supervisedEscalateSec: secondsSetting(env, "SUPERVISED_ESCALATE_SEC", ROLE_DEFAULTS.supervisedEscalateSec),
     bareMessageTarget: target === "main" ? "main" : "last",
+    mainDonePing: donePing === "relay" ? "relay" : "always",
+    mainRelayMarker: textSetting(env, "MAIN_RELAY_MARKER", ROLE_DEFAULTS.mainRelayMarker),
   };
 }
 
@@ -275,4 +280,66 @@ export const API_ERROR_NOTICE = "主会话这一轮被接口错误打断了，�
 export function apiErrorMessage(line) {
   const detail = String(line ?? "").trim();
   return detail ? `${API_ERROR_NOTICE}\n\n${detail.slice(0, 200)}` : API_ERROR_NOTICE;
+}
+
+// ---------------------------------------------------------------------------
+// What the main session's done sends, with drover. The chat is for approvals
+// and instructions, not for relaying every turn: a main session that watches
+// orchestrators with Monitor takes a turn for every event they raise, and
+// pinging each of those buried the one answer the user had asked for.
+//
+// `chatAnswers` are the answers found for chat messages still waiting for one
+// ([{ id, answer, channel, messageId }]); `turnAnswer` is this done's own
+// answer. Returns the pings to send, each { kind, text, replyTo? }:
+//   "chat"      the answer to a chat message, as a reply to it
+//   "relay"     MAIN_DONE_PING=relay: a turn that starts with the relay marker,
+//               which is how drover's main session hands on an orchestrator's
+//               "needs you" (the marker stays in the text)
+//   "done"      MAIN_DONE_PING=always: every turn, as before
+//   "api-error" the turn was cut short; nothing else goes out this time, and
+//               the chat message it was answering keeps waiting
+// No pings means the done stays quiet. The same text never goes out twice.
+export function mainDonePlan({
+  mode = ROLE_DEFAULTS.mainDonePing,
+  marker = ROLE_DEFAULTS.mainRelayMarker,
+  chatAnswers = [],
+  turnAnswer,
+  apiErrorText,
+  waiting,
+}) {
+  if (apiErrorText) {
+    const replyTo = waiting ? { channel: waiting.channel, messageId: waiting.messageId } : undefined;
+    return [{ kind: "api-error", text: apiErrorText, ...(replyTo ? { replyTo } : {}) }];
+  }
+  const pings = chatAnswers
+    .filter((item) => String(item.answer ?? "").trim())
+    .map((item) => ({
+      kind: "chat",
+      id: item.id,
+      text: String(item.answer).trim(),
+      replyTo: { channel: item.channel, messageId: item.messageId },
+    }));
+  const said = new Set(pings.map((ping) => squash(ping.text)));
+  const turn = String(turnAnswer ?? "").trim();
+  if (mode === "relay") {
+    if (turn && marker && turn.startsWith(marker) && !said.has(squash(turn))) {
+      pings.push({ kind: "relay", text: turn });
+    }
+  } else if (!turn || !said.has(squash(turn))) {
+    pings.push({ kind: "done", text: turn || "finished" });
+  }
+  return pings;
+}
+
+function squash(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
+// The main session's own dialog, as its ping reads with drover: what it is
+// waiting for, then the dialog, with no location line. Everyone knows where
+// the main session is; the buttons and the fingerprint are what matter.
+export const MAIN_BLOCKED_TITLE = "主会话在等你确认";
+
+export function mainBlockedText(body) {
+  return [MAIN_BLOCKED_TITLE, "", body || "waiting for input", "", BLOCKED_HINT].join("\n");
 }

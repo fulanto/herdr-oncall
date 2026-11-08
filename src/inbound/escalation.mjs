@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   blockedSnippet,
+  currentPaneStatus,
   dialogChoices,
   dialogFingerprint,
   escalateAfterSec,
@@ -101,12 +102,25 @@ function paneClosed(paneId, run) {
 // | { kind: "unreadable" }. A blank read is never evidence that the dialog
 // went away (one read can land mid-redraw), and neither is one read without a
 // dialog: it is read again a moment later before the record is dropped.
+//
+// Nor is the screen alone evidence that a dialog is still up. An agent that
+// prints dialog text of its own (it was reading a session record full of
+// approvals) ends its output on a question and numbered choices, and with only
+// a spinner and the prompt box under them that reads as a live dialog: the
+// poller kept resetting a worker's clock for "a different dialog" while Herdr
+// said, correctly, that the worker was working, and ten minutes of that output
+// would have sent an escalation for nothing. So a dialog on screen also needs
+// Herdr not to say `working`. The hook only arms on `blocked`; a background
+// subagent's dialog that Herdr reports as `working` was never in scope. `done`
+// or `idle` with a dialog drawn is Herdr missing one, and still counts, as does
+// a status that cannot be read.
 async function observe(record, { run, readScreen, wait, recheckMs }) {
+  const live = (screen) => screenHasLiveDialog(screen) && currentStatus(record.paneId, run) !== "working";
   const first = readScreen(record.paneId);
   if (!String(first).trim()) {
     return paneClosed(record.paneId, run) ? { kind: "closed" } : { kind: "unreadable" };
   }
-  if (screenHasLiveDialog(first)) {
+  if (live(first)) {
     return { kind: "live", screen: first, fingerprint: dialogFingerprint(first) };
   }
   if (!record.fingerprint) {
@@ -120,25 +134,14 @@ async function observe(record, { run, readScreen, wait, recheckMs }) {
   if (!String(second).trim()) {
     return { kind: "unreadable" };
   }
-  if (screenHasLiveDialog(second)) {
+  if (live(second)) {
     return { kind: "live", screen: second, fingerprint: dialogFingerprint(second) };
   }
   return { kind: "gone" };
 }
 
 function currentStatus(paneId, run) {
-  const result = run(["pane", "get", paneId]);
-  if (herdrFailed(result)) {
-    return undefined;
-  }
-  try {
-    const payload = JSON.parse(result.stdout);
-    const root = payload?.result?.pane ?? payload?.result ?? payload;
-    const status = root?.agent_status ?? root?.agent?.state ?? root?.agent?.status;
-    return typeof status === "string" ? status.toLowerCase() : undefined;
-  } catch {
-    return undefined;
-  }
+  return currentPaneStatus(paneId, run);
 }
 
 function label(record) {
