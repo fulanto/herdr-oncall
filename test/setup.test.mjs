@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { integrationLines, modeHint, setupHints } from "../src/lib/index.mjs";
+import { integrationLines, modeHint, roleSettings, rolesActive, setupHints } from "../src/lib/index.mjs";
 
 const envPath = "/cfg/.env";
 // A current Node unless a test says otherwise, so the hints do not depend on
@@ -121,4 +121,85 @@ test("what the automatic install did is said once, failures included", () => {
   });
   assert.match(installed, /^codex: installed Herdr's codex integration.*restart codex sessions already running/);
   assert.equal(failed, "codex: herdr integration install codex failed: no config dir");
+});
+
+// What seed and install pass as `drover`: rolesActive() over the merged
+// settings, true once drover.env names the main session.
+const withDrover = rolesActive(roleSettings({ MAIN_AGENT_NAME: "drover" }));
+const withoutDrover = rolesActive(roleSettings({}));
+
+// drover's install guides its users to Feishu, and drover points them at this
+// output when something is off, so with drover nothing here mentions Telegram.
+test("with drover and nothing paired, only Feishu is offered, through drover's command", () => {
+  assert.equal(withDrover, true);
+  for (const panel of ["ready", "unsupported", "unbuilt", "off"]) {
+    for (const token of [undefined, "t"]) {
+      const lines = setupHints({ ...fresh, panel, token, drover: withDrover });
+      const text = lines.join("\n");
+      assert.ok(!/telegram/i.test(text), `${panel} ${token}\n${text}`);
+      assert.ok(!text.includes("action invoke pair --plugin"), text);
+      assert.ok(!text.includes("pick one"), text);
+      const feishu = lines.indexOf("  feishu: scan with the Feishu app, no token needed:");
+      assert.ok(feishu > 0, text);
+      assert.equal(lines[feishu + 1], "    ~/.drover/bin/drover oncall pair");
+      assert.ok(
+        lines.includes(
+          "    (it runs this plugin's pair-feishu action: herdr plugin action invoke pair-feishu --plugin com.codreamer.herdr.oncall)",
+        ),
+        text,
+      );
+    }
+  }
+});
+
+test("with drover, the hint still says what Feishu is for and where the QR code will be", () => {
+  const mac = setupHints({ ...fresh, panel: "ready", drover: withDrover });
+  assert.deepEqual(mac, [
+    "panel: ready, blocked and done open a panel on this Mac",
+    "remote (optional, for pings away from the desk and messages to drover's main session):",
+    "  feishu: scan with the Feishu app, no token needed:",
+    "    ~/.drover/bin/drover oncall pair",
+    "    (the QR opens in a panel on this Mac)",
+    "    (it runs this plugin's pair-feishu action: herdr plugin action invoke pair-feishu --plugin com.codreamer.herdr.oncall)",
+    "check it:",
+    "  herdr plugin action invoke test --plugin com.codreamer.herdr.oncall",
+  ]);
+  const bare = setupHints({ ...fresh, panel: "unsupported", drover: withDrover });
+  assert.ok(bare.includes("remote (needed, nothing else can reach you here):"), bare.join("\n"));
+  assert.ok(bare.some((line) => line.includes("(the QR is in: herdr plugin log list")), bare.join("\n"));
+  const old = setupHints({ ...fresh, panel: "ready", websocket: false, nodeVersion: "v20.11.0", drover: withDrover });
+  assert.ok(old.includes("    (replies need Node 22 or later, this is v20.11.0)"));
+});
+
+test("with drover, a Telegram the user paired is still reported as paired", () => {
+  const lines = setupHints({ ...fresh, panel: "ready", token: "t", chatId: "1", drover: withDrover });
+  assert.ok(lines.includes("telegram: paired"), lines.join("\n"));
+  assert.ok(!lines.some((line) => line.includes("oncall pair") || line.includes("action invoke pair")));
+  const both = setupHints({ ...fresh, panel: "ready", token: "t", chatId: "1", feishu: true, channels: ["feishu"], drover: withDrover });
+  assert.ok(both.includes("feishu: paired"));
+  assert.ok(both.includes("telegram: paired, but CHANNEL does not include it"));
+});
+
+// Without drover the output is exactly what it was before drover existed.
+test("without drover, nothing paired is offered both channels exactly as before", () => {
+  assert.equal(withoutDrover, false);
+  assert.deepEqual(setupHints({ ...fresh, panel: "ready", drover: withoutDrover }), [
+    "panel: ready, blocked and done open a panel on this Mac",
+    "remote (optional, for pings away from the desk), pick one:",
+    "  feishu: scan with the Feishu app, no token needed:",
+    "    herdr plugin action invoke pair-feishu --plugin com.codreamer.herdr.oncall",
+    "    (the QR opens in a panel on this Mac)",
+    "  telegram: put TELEGRAM_BOT_TOKEN in /cfg/.env, then:",
+    "    herdr plugin action invoke pair --plugin com.codreamer.herdr.oncall",
+    "check it:",
+    "  herdr plugin action invoke test --plugin com.codreamer.herdr.oncall",
+  ]);
+  for (const panel of ["ready", "unsupported", "unbuilt", "off"]) {
+    for (const extra of [{}, { token: "t" }, { token: "t", chatId: "1" }, { feishu: true, channels: ["feishu"] }]) {
+      assert.deepEqual(
+        setupHints({ ...fresh, panel, ...extra, drover: withoutDrover }),
+        setupHints({ ...fresh, panel, ...extra }),
+      );
+    }
+  }
 });

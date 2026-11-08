@@ -8,6 +8,7 @@ import {
   modeHint,
   panelState,
   remoteChannels,
+  rolesActive,
   seedConfigEnv,
   sendRemote,
   setupHints,
@@ -66,6 +67,7 @@ async function testPanel() {
       channels: channelList(),
       integrations: missingIntegrations(),
       envPath,
+      drover: rolesActive(),
     });
     console.error(["nothing to test yet:", ...hints].join("\n"));
     return 1;

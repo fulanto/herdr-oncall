@@ -92,6 +92,8 @@ The poller rereads `.env` on every pass, so it picks the token up without a rest
 
 Scan the terminal QR or open the printed `t.me/…?start=…` link. The poller writes `TELEGRAM_CHAT_ID` for you.
 
+With drover, a paired Telegram chat works like the Feishu chat described in [With drover](#with-drover): messages to the main session are prefixed `[Telegram] `, and whoever gets into the chat can drive the main session too.
+
 ### Check it
 
 Send a test ping:
@@ -151,7 +153,7 @@ Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: onc
 
 ## With drover
 
-drover runs a main session that you talk to, orchestrators it starts (`orch-*`), and workers they start. Each layer approves the dialogs of the one below it, so only the main session's own dialogs are yours. drover's installer installs Oncall for you and configures it by writing `drover.env` next to your `.env` in the config dir; you do not install or configure anything by hand, and your `.env` (pairing, `CHANNEL`) is left alone. Without drover, none of this applies and Oncall works exactly as described above.
+drover runs a main session that you talk to, orchestrators it starts (`orch-*`), and workers they start. Each layer approves the dialogs of the one below it, so only the main session's own dialogs are yours. drover's installer installs Oncall for you and configures it by writing `drover.env` next to your `.env` in the config dir; you do not install or configure anything by hand, and your `.env` (pairing, `CHANNEL`) is left alone. The one step left to you is pairing Feishu: `~/.drover/bin/drover oncall pair` runs the `pair-feishu` action (see [Feishu: scan to pair](#feishu-scan-to-pair)). Without drover, none of this applies and Oncall works exactly as described above.
 
 Who is who comes from the agent's name in Herdr:
 
@@ -172,7 +174,7 @@ An escalation says who is stuck, for how long, where, and who normally answers (
 
 Everything else is quiet (`quiet · main · … · done (not a chat answer or relay)` in the plugin log); the done panel on the Mac opens as before. These pings carry only the main session's words: no `done · Claude` title and no location line.
 
-**The chat is a line to the main session** (`BARE_MESSAGE_TARGET=main`). A message that quotes no ping goes to the main session, found by name every time; quoting a ping or tapping a button answers that ping's pane, as always. What goes in is prefixed `[飞书] ` (Telegram: `[Telegram] `) and stripped of control characters, because the terminal reads the input box as keys: a leading `!` would run a shell command and a leading `/` a slash command, and an ESC is a keypress. Up to 2000 characters; newlines are kept. When the main session cannot take it right now, the message waits in the poller and goes in by itself later, and the reply says why:
+**The chat is a line to the main session** (`BARE_MESSAGE_TARGET=main`). A message that quotes no ping goes to the main session, found by name every time; quoting a ping or tapping a button answers that ping's pane, as always. What goes in is prefixed `[飞书] ` and stripped of control characters, because the terminal reads the input box as keys: a leading `!` would run a shell command and a leading `/` a slash command, and an ESC is a keypress. Up to 2000 characters; newlines are kept. When the main session cannot take it right now, the message waits in the poller and goes in by itself later, and the reply says why:
 
 - a dialog or a question is waiting: answer that first;
 - the terminal's input box holds text you have not sent (it would go out with yours): `/send` clears it and sends, and the reply quotes what was cleared;
@@ -181,7 +183,7 @@ Everything else is quiet (`quiet · main · … · done (not a chat answer or re
 
 A message still waiting after 30 minutes is mentioned once and kept. A dialog the main session raises while one of your chat messages still waits for its answer is pinged at once, without the panel's wait.
 
-Commands, handled by Oncall and never typed into a pane: `/help`, `/off` and `/on` (the same switch as the `toggle` action; while off, nothing from the chat reaches a pane, buttons included), and `/send`. `/off` only stops Oncall from bothering you; it does not protect anything, since whoever can send `/off` can send `/on`. **Anyone who gets into the paired Feishu (or Telegram) account can drive the main session like you can**, including pushing code: there is no extra confirmation for what comes from the chat. Unpair (`unpair-feishu`) if the account is lost.
+Commands, handled by Oncall and never typed into a pane: `/help`, `/off` and `/on` (the same switch as the `toggle` action; while off, nothing from the chat reaches a pane, buttons included), and `/send`. `/off` only stops Oncall from bothering you; it does not protect anything, since whoever can send `/off` can send `/on`. **Anyone who gets into the paired Feishu account can drive the main session like you can**, including pushing code: there is no extra confirmation for what comes from the chat. Unpair (`unpair-feishu`) if the account is lost.
 
 Not covered: while a main session waits for a background subagent, Herdr reports the subagent's dialog as `working`, so no blocked event arrives for it (drover's own watcher reads the screen for that case).
 

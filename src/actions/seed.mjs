@@ -8,6 +8,7 @@ import {
   missingIntegrations,
   modeEnabled,
   panelState,
+  rolesActive,
   seedConfigEnv,
   setupHints,
 } from "../lib/index.mjs";
@@ -37,5 +38,6 @@ console.log(
     integrations: missingIntegrations(),
     envPath,
     enabled: modeEnabled(),
+    drover: rolesActive(),
   }).join("\n"),
 );

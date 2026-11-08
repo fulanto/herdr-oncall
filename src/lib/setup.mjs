@@ -7,6 +7,10 @@ const PANEL_HINTS = {
     "panel: not built, needs Xcode Command Line Tools (xcode-select --install), then reinstall the plugin",
 };
 
+// drover's command for pairing Feishu (`drover oncall pair` invokes this
+// plugin's pair-feishu action), at the path drover installs it to.
+const DROVER_PAIR = "~/.drover/bin/drover oncall pair";
+
 // The command line that runs one of this plugin's actions.
 export function actionCommand(id) {
   return `herdr plugin action invoke ${id} --plugin ${PLUGIN_ID}`;
@@ -60,6 +64,12 @@ function pairedLine(name, channels, oldNode) {
 // With nothing paired, the two channels are offered side by side, Feishu first:
 // one scan sets it up, while Telegram needs a token from BotFather. Once one is
 // paired, the other's setup is noise and is left out.
+//
+// With drover (`drover`: rolesActive(), i.e. drover.env names a main session),
+// Feishu is the only channel offered, through drover's own command, and
+// Telegram is not mentioned at all: drover's install guides its users to Feishu,
+// and this output is what drover tells them to read when something is off. A
+// Telegram the user paired themselves is still reported as paired.
 export function setupHints({
   panel,
   token,
@@ -71,6 +81,7 @@ export function setupHints({
   nodeVersion = process.version,
   integrations = [],
   enabled = true,
+  drover = false,
 }) {
   const lines = [];
   if (PANEL_HINTS[panel]) {
@@ -90,9 +101,17 @@ export function setupHints({
     lines.push(`  (kept across reinstalls and updates; to pair a new bot, unpair first: ${actionCommand("unpair-feishu")})`);
   }
   if (!telegram && !feishu) {
-    const role = panel === "ready" ? "optional, for pings away from the desk" : "needed, nothing else can reach you here";
-    lines.push(`remote (${role}), pick one:`);
-    lines.push("  feishu: scan with the Feishu app, no token needed:", action("pair-feishu", "    "));
+    const role =
+      panel !== "ready"
+        ? "needed, nothing else can reach you here"
+        : drover
+          ? "optional, for pings away from the desk and messages to drover's main session"
+          : "optional, for pings away from the desk";
+    lines.push(drover ? `remote (${role}):` : `remote (${role}), pick one:`);
+    lines.push(
+      "  feishu: scan with the Feishu app, no token needed:",
+      drover ? `    ${DROVER_PAIR}` : action("pair-feishu", "    "),
+    );
     // Without the panel, the QR code only exists in the action's output.
     lines.push(
       panel === "ready"
@@ -102,10 +121,15 @@ export function setupHints({
     if (oldNode) {
       lines.push(`    (${oldNode})`);
     }
-    lines.push(
-      token ? "  telegram: token set, chat not paired yet:" : `  telegram: put TELEGRAM_BOT_TOKEN in ${envPath}, then:`,
-      action("pair", "    "),
-    );
+    if (drover) {
+      // The same action, for when drover's command is not where it installs.
+      lines.push(`    (it runs this plugin's pair-feishu action: ${actionCommand("pair-feishu")})`);
+    } else {
+      lines.push(
+        token ? "  telegram: token set, chat not paired yet:" : `  telegram: put TELEGRAM_BOT_TOKEN in ${envPath}, then:`,
+        action("pair", "    "),
+      );
+    }
   }
   // `integrations` lists the agents still without the Herdr integration they
   // need — Codex, whose panes cannot otherwise be tied to a session. Oncall

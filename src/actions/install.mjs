@@ -10,6 +10,7 @@ import {
   modeEnabled,
   panelState,
   pluginRoot,
+  rolesActive,
   runHerdr,
   seedConfigEnv,
   setupHints,
@@ -57,6 +58,7 @@ console.log(
     integrations: missingIntegrations(),
     envPath,
     enabled: modeEnabled(),
+    drover: rolesActive(),
   }).join("\n"),
 );
 
