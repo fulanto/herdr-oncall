@@ -1,4 +1,4 @@
-import { feishuCreds, feishuOpenId, sendFeishu } from "./feishu.mjs";
+import { feishuCreds, feishuOpenId, replyFeishu, sendFeishu } from "./feishu.mjs";
 import { optionKeyboard } from "./format.mjs";
 import { sendTelegram } from "./telegram.mjs";
 
@@ -34,15 +34,25 @@ export function remoteChannels(env = process.env) {
 
 // One ping on one channel. A blocked ping with choices carries them as buttons;
 // anything else asks for a typed reply. Returns the message id replies and taps
-// will name.
-export async function sendRemote(name, text, { status, options = [] } = {}) {
+// will name. `replyTo` sends it as a reply to that message of the channel's;
+// when the reply is refused (the message is gone, too old) it goes out as an
+// ordinary message instead, since the answer matters more than where it sits.
+export async function sendRemote(name, text, { status, options = [], replyTo } = {}) {
   const choices = status === "blocked" ? options : [];
   if (name === "feishu") {
+    if (replyTo) {
+      try {
+        return await replyFeishu(feishuCreds(), replyTo, text, { options: choices });
+      } catch (error) {
+        console.error(`feishu reply failed, sending it as a new message: ${error?.message || error}`);
+      }
+    }
     return sendFeishu(feishuCreds(), feishuOpenId(), text, { options: choices });
   }
   return sendTelegram(process.env.TELEGRAM_BOT_TOKEN.trim(), process.env.TELEGRAM_CHAT_ID.trim(), text, {
     forceReply: choices.length === 0,
     replyMarkup: optionKeyboard(choices),
+    replyTo,
   });
 }
 
@@ -51,7 +61,8 @@ export async function sendRemote(name, text, { status, options = [] } = {}) {
 // log that spoke only on failure could not tell a ping that was sent from one
 // that was never attempted, and "the test arrives but a blocked ping does not"
 // could not be answered from it at all. `sent(channel, messageId)` records the
-// message so replies and taps can find their pane.
+// message so replies and taps can find their pane. `replyTo(channel)` names the
+// message, if any, this ping answers on that channel.
 export async function pingChannels(
   channels,
   text,
@@ -61,6 +72,7 @@ export async function pingChannels(
     where,
     send = sendRemote,
     sent = () => {},
+    replyTo = () => undefined,
     log = console.log,
     error = console.error,
     describe = (err) => err?.message || String(err),
@@ -68,8 +80,9 @@ export async function pingChannels(
 ) {
   for (const channel of channels) {
     try {
-      const messageId = await send(channel, text, { status, options });
-      log(`sent · ${channel} · ${where}`);
+      const parent = replyTo(channel);
+      const messageId = await send(channel, text, parent ? { status, options, replyTo: parent } : { status, options });
+      log(`sent · ${channel} · ${where}${parent ? " · as a reply" : ""}`);
       sent(channel, messageId);
     } catch (err) {
       error(`${channel} ping failed · ${where}: ${describe(err)}`);

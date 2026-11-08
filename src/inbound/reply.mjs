@@ -9,10 +9,13 @@ import {
   dialogFingerprint,
   envFlag,
   extractStartPayload,
+  modeEnabled,
   nextDialog,
   optionKeyboard,
   pendingPair,
   readPaneScreen,
+  roleSettings,
+  rolesActive,
   runHerdr,
   saveScreen,
   screenHasLiveDialog,
@@ -25,6 +28,7 @@ import {
   upsertEnvValue,
 } from "../lib/index.mjs";
 import { describeError } from "./poller.mjs";
+import { OFF_NOTICE, routeChatMessage } from "./main-inbox.mjs";
 
 const OUTBOUND_TTL_MS = 24 * 60 * 60 * 1000;
 const NAMED_KEYS = {
@@ -321,7 +325,27 @@ export async function handleTelegramUpdate(update, deps = {}) {
     return { skipped: "chat" };
   }
   const channel = telegramChannel(deps);
-  if (!text || text.startsWith("/")) {
+  if (!text) {
+    return { skipped: "command" };
+  }
+  // With drover: commands, the off switch, and a line to the main session.
+  const settings = deps.settings ?? roleSettings();
+  if (rolesActive(settings)) {
+    return routeChatMessage(text, {
+      channel,
+      quotedId: message.reply_to_message?.message_id,
+      messageId: message.message_id,
+      settings,
+      run: deps.run,
+      wait: deps.wait,
+      now: deps.now,
+      enabled: deps.enabled,
+      setEnabled: deps.setEnabled,
+      channelFor: deps.channelFor,
+      deps,
+    });
+  }
+  if (text.startsWith("/")) {
     if (text === "/start" || text.startsWith("/start@") || text === "/help") {
       await channel.reply(REPLY_HELP);
     }
@@ -372,6 +396,12 @@ async function handleCallback(query, deps) {
     return { skipped: "no-data" };
   }
   const channel = telegramChannel(deps);
+  // With drover, off means nothing from the chat reaches a pane, taps included.
+  if (rolesActive(deps.settings ?? roleSettings()) && !(deps.enabled ?? modeEnabled())) {
+    await answer(token, query.id, "oncall is off");
+    await channel.reply(OFF_NOTICE);
+    return { skipped: "off" };
+  }
   // A tap always names its own message, so an id we do not know is not a reason
   // to fall back to the most recent ping and press a key into some other pane.
   const record = lookupOutbound(query?.message?.message_id);

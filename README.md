@@ -72,7 +72,7 @@ herdr plugin action invoke unpair-feishu --plugin com.codreamer.herdr.oncall
 
 That empties the `FEISHU_*` keys in `.env`, takes `feishu` out of `CHANNEL` (back to `telegram` if it was the only one), withdraws a scan still in progress so it cannot pair the machine afterwards, and messages the old bot `unpaired`. The old bot itself stays in Feishu until you delete it on the Feishu open platform. The next `pair-feishu` creates a new one.
 
-A blocked ping arrives as a card with one button per option; the card replaces its buttons with what was sent once you tap. To answer with text, reply to the ping (quote it); a plain message goes to the pane the last ping was about. Receiving replies needs Node 22 or later, since Feishu delivers them over a WebSocket.
+A blocked ping arrives as a card with one button per option; the card replaces its buttons with what was sent once you tap. To answer with text, reply to the ping (quote it); a plain message goes to the pane the last ping was about (with drover, to the main session instead: see [With drover](#with-drover)). Receiving replies needs Node 22 or later, since Feishu delivers them over a WebSocket.
 
 ### Telegram
 
@@ -124,6 +124,10 @@ Every blocked or done event leaves a line in `herdr plugin log list --plugin com
 | `skipped · <where> · blocked but no dialog on screen · tail: …` | Herdr said blocked but no prompt was recognised on screen; the screen is saved to `last-skipped-screen.txt` |
 | `debounced · <where> · …` | the same pane and status within `DEBOUNCE_MS` |
 | `off · …` / `ignored · … · not in NOTIFY_ON=…` | Oncall is toggled off, or `NOTIFY_ON` leaves the status out |
+| `quiet · worker · <name> · <where> · done (supervised)` | with drover: an orchestrator's or a worker's turn ended; the layer above relays it |
+| `escalation armed · worker · <name> · <where> · pings after 600s if nobody answers` | with drover: a dialog the layer above should answer; the poller pings if it is still there then |
+
+With drover, the poller's own log (`poller.log` in the state dir) carries what happens to those dialogs afterwards (`escalated · …`, `escalation cleared · … · dialog gone`, `escalation reset · … · a different dialog is up`) and every chat message for the main session (`main inbox · delivered|stashed|refused · <length> chars · …`, never the text).
 
 No line at all for a blocked prompt means Herdr never reported the pane as blocked. Check `herdr pane list` while the prompt is up.
 
@@ -141,6 +145,40 @@ Your `.env` survives reinstalls.
 Releases install themselves. Every few hours, and whenever Herdr starts, Oncall asks Herdr to update it from the `stable` branch, which moves only when a new version is released. Herdr checks out and builds the new version beside the old one, and Oncall tells your paired chat `oncall updated · v… → v…`. A copy installed without `--ref stable` is moved onto it the first time. A checkout linked with `install.sh` is never touched. `AUTO_UPDATE=0` turns it off; `herdr plugin update com.codreamer.herdr.oncall --yes` updates by hand.
 
 Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: once the tests pass, CI publishes the release, titled and described by that commit's message, and moves `stable` to it.
+
+## With drover
+
+drover runs a main session that you talk to, orchestrators it starts (`orch-*`), and workers they start. Each layer approves the dialogs of the one below it, so only the main session's own dialogs are yours. drover's installer installs Oncall for you and configures it by writing `drover.env` next to your `.env` in the config dir; you do not install or configure anything by hand, and your `.env` (pairing, `CHANNEL`) is left alone. Without drover, none of this applies and Oncall works exactly as described above.
+
+Who is who comes from the agent's name in Herdr:
+
+| name | role | blocked | done |
+|---|---|---|---|
+| `MAIN_AGENT_NAME` (`drover`) | the main session | as without drover: panel, then phone after `BLOCKED_DELAY_SEC` | pinged every time |
+| starts with `SUPERVISOR_PREFIX` (`orch-`) | orchestrator | no panel, no ping; pinged only if the same dialog is still waiting after `SUPERVISOR_ESCALATE_SEC` (5 min; 2 min, `SUPERVISOR_ESCALATE_SEC_CODEX`, when the main session runs Codex, which has nobody watching its orchestrators) | not pinged: the main session relays it |
+| any other name | worker | the same, after `SUPERVISED_ESCALATE_SEC` (10 min) | not pinged: its orchestrator relays it |
+| no name | a pane you opened | as without drover | as without drover |
+
+An escalation says who is stuck, for how long, where, and who normally answers (`升级 · worker hca-e2e 卡在确认框 10 分钟`), and carries the dialog's buttons like any blocked ping. It goes out once per dialog; a different dialog starts the clock over, and one that leaves the screen is forgotten. With no phone channel paired it opens the panel instead. The poller keeps the clock, so nothing waits inside a hook. When the main session's turn ends on an API error, its done ping says so and asks you to answer `继续`.
+
+**The chat is a line to the main session** (`BARE_MESSAGE_TARGET=main`). A message that quotes no ping goes to the main session, found by name every time; quoting a ping or tapping a button answers that ping's pane, as always. What goes in is prefixed `[飞书] ` (Telegram: `[Telegram] `) and stripped of control characters, because the terminal reads the input box as keys: a leading `!` would run a shell command and a leading `/` a slash command, and an ESC is a keypress. Up to 2000 characters; newlines are kept. When the main session cannot take it right now, the message waits in the poller and goes in by itself later, and the reply says why:
+
+- a dialog or a question is waiting: answer that first;
+- the terminal's input box holds text you have not sent (it would go out with yours): `/send` clears it and sends, and the reply quotes what was cleared;
+- Codex is in the middle of a turn: a message would cut that turn short, so it waits until Codex stops (Claude Code queues it itself and takes it next);
+- the main session has no name for a moment (it is restarting): up to 30 seconds, then `没找到主会话…`.
+
+A message still waiting after 30 minutes is mentioned once and kept. The main session's answer to a turn you started from the chat arrives as a reply under your message, and a dialog it raises in that turn is pinged at once, without the panel's wait.
+
+Commands, handled by Oncall and never typed into a pane: `/help`, `/off` and `/on` (the same switch as the `toggle` action; while off, nothing from the chat reaches a pane, buttons included), and `/send`. `/off` only stops Oncall from bothering you; it does not protect anything, since whoever can send `/off` can send `/on`. **Anyone who gets into the paired Feishu (or Telegram) account can drive the main session like you can**, including pushing code: there is no extra confirmation for what comes from the chat. Unpair (`unpair-feishu`) if the account is lost.
+
+Not covered: while a main session waits for a background subagent, Herdr reports the subagent's dialog as `working`, so no blocked event arrives for it (drover's own watcher reads the screen for that case).
+
+drover reads Oncall's state with the `status` action's script, which prints one line of JSON (version, switch, channels paired or not, poller, panel, the effective role settings, whether the main session is registered) and never a secret:
+
+```sh
+/bin/bash <plugin_root>/bin/run-node.sh src/actions/status.mjs
+```
 
 ## Config
 
@@ -165,6 +203,17 @@ Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: onc
 | `DESKTOP_PANEL_DEBUG` | empty | `1` logs the screen and window rect the panel was placed on, and its focus mode, window level, key and active state, when it opens and when it is clicked |
 | `HERDR_TELEGRAM_ENABLED` | `1` | start enabled; toggle with the `toggle` action |
 | `HERDR_TELEGRAM_SET_TITLE` | `1` | set the host terminal title while on |
+
+drover's keys, written to `drover.env` by drover's installer (see [With drover](#with-drover)). That file is read after both `.env` files, so a value you put in `.env` wins over drover's, except an empty one, which does not count as set. Leave them out of `.env` unless you mean to override drover.
+
+| key | default | meaning |
+|---|---|---|
+| `MAIN_AGENT_NAME` | empty | the main session's agent name in Herdr (`drover`). Empty = no roles: every pane as without drover |
+| `SUPERVISOR_PREFIX` | `orch-` | agents named with this prefix are orchestrators |
+| `SUPERVISOR_ESCALATE_SEC` | `300` | how long an orchestrator's dialog may wait before you are pinged |
+| `SUPERVISOR_ESCALATE_SEC_CODEX` | `120` | the same, when the main session runs Codex |
+| `SUPERVISED_ESCALATE_SEC` | `600` | how long a worker's dialog may wait before you are pinged |
+| `BARE_MESSAGE_TARGET` | `last` | where a chat message that quotes no ping goes: `last` = the pane of the latest ping, `main` = the main session |
 
 Toggle it off without uninstalling:
 
@@ -191,9 +240,9 @@ herdr-plugin.toml     manifest: actions, event hooks, build steps
 bin/                  node locator, dependency install, compiled panel
 src/desktop/          panel.swift — the macOS floating panel
 src/lib/              screen parsing, Herdr calls, config, Telegram, Feishu
-src/hooks/            notify (event hook) + poll (Telegram long-poll, Feishu long connection)
-src/inbound/          replies and delivery back into the pane
-src/actions/          setup, pair, pair-feishu, unpair-feishu, test, toggle, poll
+src/hooks/            notify (event hook) + poll (Telegram long-poll, Feishu long connection, escalations, main-session inbox)
+src/inbound/          replies and delivery back into the pane, escalations, the main-session inbox
+src/actions/          setup, pair, pair-feishu, unpair-feishu, test, toggle, poll, status
 test/
 ```
 

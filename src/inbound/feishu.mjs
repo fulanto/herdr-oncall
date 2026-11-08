@@ -1,5 +1,6 @@
-import { feishuCard, sendFeishu, updateFeishuCard } from "../lib/index.mjs";
+import { feishuCard, modeEnabled, roleSettings, rolesActive, sendFeishu, updateFeishuCard } from "../lib/index.mjs";
 import { describeError } from "./poller.mjs";
+import { OFF_NOTICE, routeChatMessage } from "./main-inbox.mjs";
 import { NO_TARGET, REPLY_HELP, finishDelivery, lookupOutbound, replyTarget } from "./reply.mjs";
 
 export function feishuChannel(creds, openId, deps = {}) {
@@ -84,6 +85,27 @@ function onMessage(event, deps) {
     return { skipped: "no-text" };
   }
   const channel = feishuChannel(deps.creds, deps.openId, deps);
+  // With drover: commands, the off switch, and a line to the main session.
+  // The identity checks above stay exactly as they are.
+  const settings = deps.settings ?? roleSettings();
+  if (rolesActive(settings)) {
+    return {
+      work: () =>
+        routeChatMessage(text, {
+          channel,
+          quotedId: message.parent_id || message.root_id,
+          messageId: message.message_id,
+          settings,
+          run: deps.run,
+          wait: deps.wait,
+          now: deps.now,
+          enabled: deps.enabled,
+          setEnabled: deps.setEnabled,
+          channelFor: deps.channelFor,
+          deps,
+        }),
+    };
+  }
   if (text.startsWith("/") || /^help$/i.test(text)) {
     if (/^\/?(help|start)$/i.test(text)) {
       return {
@@ -127,6 +149,10 @@ function onCardAction(event, deps) {
   const send = String(event?.action?.value?.send ?? "").trim();
   if (!send) {
     return { skipped: "no-data" };
+  }
+  // With drover, off means nothing from the chat reaches a pane, taps included.
+  if (rolesActive(deps.settings ?? roleSettings()) && !(deps.enabled ?? modeEnabled())) {
+    return { skipped: "off", response: toast("error", OFF_NOTICE) };
   }
   const messageId = event?.context?.open_message_id ?? event?.open_message_id;
   // A tap always names its own card, so a card we do not know is not a reason

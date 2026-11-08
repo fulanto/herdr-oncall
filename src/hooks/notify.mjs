@@ -1,6 +1,8 @@
 import {
   actionCommand,
   agentDetectionSkipped,
+  apiErrorLine,
+  apiErrorMessage,
   blockedDelayMs,
   blockedDelayStillMine,
   blockedSnippet,
@@ -13,16 +15,20 @@ import {
   dialogFingerprint,
   doneSnippet,
   ensureIntegrations,
+  escalateAfterSec,
   eventGate,
   formatMessage,
   formatWhere,
   integrationLines,
   loadDotEnv,
+  lookupAgentByName,
   markBlockedDelay,
   modeEnabled,
   nextDialog,
+  notifyPlan,
   paneAgentName,
   paneIdFrom,
+  paneRole,
   panelAvailable,
   panelFocus,
   pingChannels,
@@ -32,6 +38,7 @@ import {
   remoteChannels,
   resolveStatus,
   resolveWorktree,
+  roleSettings,
   saveScreen,
   screenHasLiveDialog,
   screenHasOpenMenu,
@@ -42,10 +49,13 @@ import {
   sleep,
   statusTitle,
   stillBlocked,
+  stuckFor,
   userAtPane,
 } from "../lib/index.mjs";
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
 import { describeError, ensurePoller } from "../inbound/poller.mjs";
+import { armEscalation } from "../inbound/escalation.mjs";
+import { clearMainTurn, currentMainTurn } from "../inbound/main-inbox.mjs";
 
 // Every way this hook ends without a ping says so in the plugin log, for the
 // statuses someone waits on. When a colleague's blocked pings stopped reaching
@@ -293,7 +303,7 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
   return result.kind;
 }
 
-async function pingRemote(screen, doneBody) {
+async function pingRemote(screen, doneBody, { replyTo } = {}) {
   if (!channels.length) {
     console.log(`not sent · ${where} · no paired phone channel in CHANNEL=${channelList().join(",")}`);
     return;
@@ -314,6 +324,7 @@ async function pingRemote(screen, doneBody) {
     options,
     where,
     describe: describeError,
+    replyTo,
     sent: (channel, messageId) =>
       rememberOutbound({ messageId, paneId, status, where, title, fingerprint, options, channel, text }),
   });
@@ -332,6 +343,54 @@ async function pingAfterWait(started) {
   await pingRemote(later);
 }
 
+// Who this pane is, with drover (src/lib/roles.mjs). Nothing is asked of Herdr
+// while MAIN_AGENT_NAME is empty, and every pane is then handled as in 0.6.6.
+// One `agent get` per hook process, here.
+const settings = roleSettings();
+const { role, agent } = paneRole(paneId, { settings });
+
+// An orchestrator's or a worker's pane: the layer above answers its dialogs
+// and relays its results, so neither a ping nor a panel. A dialog is written
+// down for the poller, which pings only if it is still waiting past the
+// threshold (src/inbound/escalation.mjs).
+if (role === "supervisor" || role === "worker") {
+  const plan = notifyPlan({ role, status });
+  if (plan === "quiet") {
+    console.log(`quiet · ${role} · ${agent.name} · ${where} · ${isDone ? "done" : status} (supervised)`);
+    process.exit(0);
+  }
+  if (plan === "escalate") {
+    const screen = await readScreenSettled(readScreen, { sleep });
+    if (!blockedIsReal(screen)) {
+      console.log(`skipped · ${where} · ${blockedSkipReason(screen)} · ${skipTrace(screen)}`);
+      process.exit(0);
+    }
+    const mainKind = role === "supervisor" ? lookupAgentByName(settings.mainAgentName).kind : undefined;
+    const thresholdSec = escalateAfterSec({ role, mainKind, settings });
+    const { kept, record } = armEscalation({
+      paneId,
+      role,
+      name: agent.name,
+      kind: agent.kind,
+      where,
+      fingerprint: hookAuthoritative ? undefined : dialogFingerprint(screen),
+      thresholdSec,
+    });
+    console.log(
+      kept
+        ? `escalation kept · ${role} · ${agent.name} · ${where} · the same dialog, waiting ${stuckFor(Date.now() - record.startedAt)}`
+        : `escalation armed · ${role} · ${agent.name} · ${where} · pings after ${thresholdSec}s if nobody answers`,
+    );
+    process.exit(0);
+  }
+}
+
+// The main session's turn that a chat message started, if this one is. Its
+// question goes out at once, and its answer goes out as a reply to that
+// message, so the chat reads as a conversation.
+const turn = role === "main" ? currentMainTurn(paneId) : undefined;
+const replyToTurn = turn ? (channel) => (channel === turn.channel ? turn.messageId : undefined) : undefined;
+
 if (status === "blocked") {
   // Herdr can fire while the pane is still redrawing, so settle the read first.
   const screen = await readScreenSettled(readScreen, { sleep });
@@ -345,6 +404,11 @@ if (status === "blocked") {
   // no buttons anywhere, only free text.
   const panelOptions = dialogChoices(screen, { hookAuthoritative });
   const fingerprint = hookAuthoritative ? undefined : dialogFingerprint(screen);
+  const pingedAtOnce = Boolean(turn);
+  if (pingedAtOnce) {
+    console.log(`blocked · ${where} · this turn came from ${turn.channel}, pinging at once`);
+    await pingRemote(screen, undefined, { replyTo: replyToTurn });
+  }
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
     // time out and fall through to the phone. If the user is (or arrives) at
@@ -395,6 +459,10 @@ if (status === "blocked") {
     if (outcome === "handled" || outcome === "superseded" || outcome === "resolved") {
       process.exit(0);
     }
+    if (pingedAtOnce) {
+      // The phone has had this question since it appeared.
+      process.exit(0);
+    }
     if (outcome === "unavailable" || outcome === "skipped" || outcome === "at-pane") {
       const remaining = delayMs - (Date.now() - started);
       if (remaining > 0) {
@@ -405,7 +473,9 @@ if (status === "blocked") {
     process.exit(0);
   }
 
-  if (delayMs > 0) {
+  if (pingedAtOnce) {
+    // Sent above, without the wait.
+  } else if (delayMs > 0) {
     const started = markBlockedDelay(paneId);
     await sleep(delayMs);
     await pingAfterWait(started);
@@ -436,7 +506,14 @@ if (status === "blocked") {
 // usable is having a turn in it, so that is what it waits for.
 let screen = "";
 let doneBody;
-if (isDone) {
+// The main session's turn cut short by an API error (drover's api_error rule):
+// its session holds the previous answer, or nothing, so the ping says what
+// happened and what to answer instead.
+const apiError = role === "main" && isDone ? apiErrorLine(readPaneScreen(paneId)) : undefined;
+if (isDone && notifyPlan({ role, status, apiError: Boolean(apiError) }) === "api-error") {
+  doneBody = apiErrorMessage(apiError);
+  console.log(`done · ${where} · the turn ended on an API error: ${apiError.slice(0, 120)}`);
+} else if (isDone) {
   doneBody = await sessionAnswer(paneId);
   let source = "session";
   if (!doneBody) {
@@ -459,7 +536,12 @@ if (isDone) {
 } else {
   screen = readScreen();
 }
-await pingRemote(screen, doneBody);
+await pingRemote(screen, doneBody, { replyTo: replyToTurn });
+if (turn && isDone) {
+  // That turn is answered; the next one is the terminal's unless another
+  // chat message starts it.
+  clearMainTurn(paneId);
+}
 // A done panel only reports the answer: no field, not on top, and the keyboard
 // stays where it was (panelFocus). It opens whenever a turn ends, which is
 // often while the user is typing somewhere else, and one that took the caret

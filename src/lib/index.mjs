@@ -14,3 +14,5 @@ export * from "./update.mjs";
 export * from "./worktree.mjs";
 export * from "./desktop.mjs";
 export * from "./setup.mjs";
+export * from "./roles.mjs";
+export * from "./status.mjs";

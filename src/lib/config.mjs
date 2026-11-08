@@ -47,10 +47,21 @@ const fromDotEnv = new Map();
 
 export function loadDotEnv(path) {
   const paths = path ? [path] : defaultDotEnvPaths();
+  // drover.env only fills in: it is the lowest layer, and a key some higher
+  // layer left empty still takes its value. The user's .env is seeded from
+  // .env.example, where most keys read `KEY=`, so an empty line there is the
+  // template talking, not the user turning a drover setting off.
+  const fillOnly = path ? undefined : droverEnvPath();
   const values = new Map();
   for (const candidate of paths) {
+    const fills = candidate === fillOnly;
     for (const [key, value] of readDotEnvFile(candidate)) {
-      if (!values.has(key)) {
+      const current = values.get(key);
+      if (!current) {
+        if (!fills || value !== "") {
+          values.set(key, { value, source: candidate });
+        }
+      } else if (fills && current.value === "" && value !== "") {
         values.set(key, { value, source: candidate });
       }
     }
@@ -66,12 +77,21 @@ export function loadDotEnv(path) {
     }
   }
   for (const [key, entry] of values) {
-    if (process.env[key] !== undefined && !fromDotEnv.has(key)) {
+    const started = process.env[key];
+    // What the process was started with wins, except an empty value against
+    // drover.env: empty does not count as set there either.
+    if (started !== undefined && !fromDotEnv.has(key) && !(entry.source === fillOnly && started === "")) {
       continue;
     }
     process.env[key] = entry.value;
     fromDotEnv.set(key, entry);
   }
+}
+
+// Written by drover's install.py next to the user's .env, rewritten whole on
+// every install and removed on uninstall. Oncall only reads it.
+export function droverEnvPath() {
+  return join(configDirPath(), "drover.env");
 }
 
 // A value this process wrote to a .env file itself, as pairing does with the
@@ -100,7 +120,10 @@ function defaultDotEnvPaths() {
   // instead meant a process started from a shell — install.sh spawns the poller
   // that way — found no `.env` at all, so it ran with no token and sat in its
   // idle loop forever without a word.
-  return [...new Set([join(configDirPath(), ".env"), join(pluginRoot, ".env")])];
+  //
+  // drover.env comes last, below both: a key the user wrote into either .env
+  // beats drover's (see loadDotEnv for the one exception, an empty value).
+  return [...new Set([join(configDirPath(), ".env"), join(pluginRoot, ".env"), droverEnvPath()])];
 }
 
 function readDotEnvFile(path) {

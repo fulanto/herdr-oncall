@@ -182,14 +182,30 @@ export function feishuCard({ text, options = [], note }) {
 }
 
 export async function sendFeishu(creds, openId, text, { options = [], fetchImpl } = {}) {
-  const message = options.length
-    ? { msg_type: "interactive", content: JSON.stringify(feishuCard({ text, options })) }
-    : { msg_type: "text", content: JSON.stringify({ text }) };
   const json = await feishuApi(
     creds,
     "POST",
     "/im/v1/messages?receive_id_type=open_id",
-    { receive_id: openId, ...message },
+    { receive_id: openId, ...feishuMessage(text, options) },
+    { fetchImpl },
+  );
+  return json?.data?.message_id;
+}
+
+function feishuMessage(text, options) {
+  return options.length
+    ? { msg_type: "interactive", content: JSON.stringify(feishuCard({ text, options })) }
+    : { msg_type: "text", content: JSON.stringify({ text }) };
+}
+
+// A message sent as a reply to another one, so it shows up under it in the
+// chat: the main session's answer under the message that asked for it.
+export async function replyFeishu(creds, messageId, text, { options = [], fetchImpl } = {}) {
+  const json = await feishuApi(
+    creds,
+    "POST",
+    `/im/v1/messages/${encodeURIComponent(messageId)}/reply`,
+    feishuMessage(text, options),
     { fetchImpl },
   );
   return json?.data?.message_id;

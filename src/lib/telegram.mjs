@@ -52,6 +52,9 @@ export async function sendTelegram(token, chatId, text, options = {}) {
   } else if (forceReply) {
     payload.reply_markup = { force_reply: true, selective: true };
   }
+  if (options.replyTo !== undefined && options.replyTo !== null) {
+    payload.reply_parameters = { message_id: Number(options.replyTo), allow_sending_without_reply: true };
+  }
   const { ok, status, text: body, json } = await telegramApi(token, "sendMessage", payload);
   if (!ok) {
     throw new Error(`telegram sendMessage failed: ${status} ${body}`);

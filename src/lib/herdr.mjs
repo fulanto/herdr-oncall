@@ -234,6 +234,25 @@ export function readPaneScreen(paneId, options = {}, run = runHerdr) {
   return "";
 }
 
+// The visible screen with its styling kept. Only for what plain text cannot
+// tell: an empty prompt box shows a dim placeholder ("Try …", "Ask Codex to do
+// anything") that reads exactly like a draft once the attributes are gone.
+export function readPaneScreenAnsi(paneId, run = runHerdr) {
+  if (!paneId) {
+    return "";
+  }
+  const result = run(["pane", "read", paneId, "--source", "visible", "--format", "ansi"]);
+  if (result?.error || result?.status !== 0 || !result?.stdout) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(result.stdout);
+    return extractReadText(parsed);
+  } catch {
+    return result.stdout;
+  }
+}
+
 // One blank read means nothing: Codex clears and redraws the pane the moment a
 // dialog is answered, and Herdr can emit `blocked` into that gap. Keep asking
 // for a few seconds, and only then believe the emptiness. Returns the last

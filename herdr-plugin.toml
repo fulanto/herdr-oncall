@@ -61,6 +61,11 @@ id = "test"
 title = "Send a test ping"
 command = ["/bin/bash", "bin/run-node.sh", "src/actions/test.mjs"]
 
+[[actions]]
+id = "status"
+title = "Show Oncall status"
+command = ["/bin/bash", "bin/run-node.sh", "src/actions/status.mjs"]
+
 [[events]]
 on = "pane.agent_status_changed"
 command = ["/bin/bash", "bin/run-node.sh", "src/hooks/notify.mjs"]

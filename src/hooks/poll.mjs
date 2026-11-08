@@ -14,8 +14,10 @@ import {
   telegramGetUpdates,
 } from "../lib/index.mjs";
 import { describeError, withTimestamps, writePollerPid } from "../inbound/poller.mjs";
-import { handleFeishuEvent } from "../inbound/feishu.mjs";
-import { handleTelegramUpdate, pollEnabled, readOffset, writeOffset } from "../inbound/reply.mjs";
+import { feishuChannel, handleFeishuEvent } from "../inbound/feishu.mjs";
+import { handleTelegramUpdate, pollEnabled, readOffset, telegramChannel, writeOffset } from "../inbound/reply.mjs";
+import { escalationLoop } from "../inbound/escalation.mjs";
+import { inboxLoop } from "../inbound/main-inbox.mjs";
 
 seedConfigEnv();
 loadDotEnv();
@@ -57,6 +59,19 @@ function logResult(result) {
   }
 }
 
+// The chat a message for the main session came from, to answer on it later
+// (the poller sends a stashed message once the main session can take it).
+function chatChannel(name) {
+  if (name === "feishu") {
+    const creds = feishuCreds();
+    const openId = feishuOpenId();
+    return creds && openId ? feishuChannel(creds, openId) : undefined;
+  }
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
+  return token && chatId ? telegramChannel({ token, chatId }) : undefined;
+}
+
 async function telegramLoop() {
   const reportIdle = idleReporter("", "polling · resumed");
   while (true) {
@@ -75,7 +90,7 @@ async function telegramLoop() {
       const updates = await telegramGetUpdates(token, readOffset());
       for (const update of updates) {
         writeOffset(Number(update.update_id) + 1);
-        logResult(await serial(() => handleTelegramUpdate(update, { token, chatId })));
+        logResult(await serial(() => handleTelegramUpdate(update, { token, chatId, channelFor: chatChannel })));
       }
     } catch (error) {
       const described = describeError(error);
@@ -131,7 +146,7 @@ async function feishuLoop() {
 }
 
 function dispatchFeishu(envelope, creds, openId) {
-  const outcome = handleFeishuEvent(envelope, { creds, openId });
+  const outcome = handleFeishuEvent(envelope, { creds, openId, channelFor: chatChannel });
   if (outcome.work) {
     serial(outcome.work).then(logResult, (error) =>
       console.error(`feishu delivery failed: ${describeError(error)}`),
@@ -179,4 +194,15 @@ async function updateLoop() {
   }
 }
 
-await Promise.all([telegramLoop(), feishuLoop(), updateLoop()]);
+// With drover: an orchestrator's or a worker's dialog that nobody answered in
+// time (escalationLoop), and messages for the main session that could not go
+// in when they arrived (inboxLoop). Both reread the config every pass, so a
+// rewritten drover.env reaches them without a restart, and both are idle while
+// there is nothing on file.
+await Promise.all([
+  telegramLoop(),
+  feishuLoop(),
+  updateLoop(),
+  escalationLoop({ reload: loadDotEnv }),
+  inboxLoop({ reload: loadDotEnv, serial, channelFor: chatChannel }),
+]);
