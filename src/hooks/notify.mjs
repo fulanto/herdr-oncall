@@ -45,7 +45,7 @@ import {
   screenHasLiveDialog,
   screenHasOpenMenu,
   sessionAnswer,
-  sessionDialogBody,
+  sessionDialog,
   shouldDebounce,
   showPanel,
   sleep,
@@ -54,7 +54,7 @@ import {
   stuckFor,
   userAtPane,
 } from "../lib/index.mjs";
-import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
+import { alreadyShown, deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "../inbound/reply.mjs";
 import { describeError, ensurePoller } from "../inbound/poller.mjs";
 import { armEscalation } from "../inbound/escalation.mjs";
 import { mainDonePings, pendingAnswers, sendMainPings } from "../inbound/main-inbox.mjs";
@@ -204,28 +204,53 @@ function blockedSkipReason(screen) {
 // the whole command, not what fit on the screen — and is used when one of its
 // open calls is the one on screen; otherwise the body is read off the screen.
 // The choices, the keys and the fingerprint always come from the screen,
-// since that is what a reply presses. One session read per distinct screen:
-// the panel re-renders the same one while it follows a form.
+// since that is what a reply presses. The call itself (`dialogCall`) is what
+// tells this dialog from another one later, however the screen is redrawn.
+// One session read per distinct screen: the panel re-renders the same one
+// while it follows a form.
 let bodyMemo;
-function blockedBody(screen) {
+function blockedDialog(screen) {
   if (bodyMemo?.screen !== screen) {
-    const fromSession = sessionDialogBody(paneId, screen);
-    bodyMemo = { screen, body: fromSession ?? blockedSnippet(screen), source: fromSession ? "session" : "screen" };
+    const fromSession = sessionDialog(paneId, screen);
+    bodyMemo = {
+      screen,
+      body: fromSession?.body ?? blockedSnippet(screen),
+      call: fromSession?.call,
+      source: fromSession ? "session" : "screen",
+    };
     if (!fromSession) {
       saveScreen("last-blocked-screen.txt", screen);
     }
     console.log(`blocked · ${where} · body from ${bodyMemo.source}`);
   }
-  return bodyMemo.body;
+  return bodyMemo;
 }
 
-function deliverFromPanel(text, fingerprint) {
-  const result = deliverReply(paneId, text, status, { fingerprint });
+function blockedBody(screen) {
+  return blockedDialog(screen).body;
+}
+
+function dialogCall(screen) {
+  return hookAuthoritative ? undefined : blockedDialog(screen).call;
+}
+
+// Returns "sent", or "stale" with what the screen shows now in `lastStale`.
+// A click that did not land must not make the panel disappear with nothing
+// left to answer: the caller shows the dialog that is up instead.
+let lastStale;
+function deliverFromPanel(text, fingerprint, call) {
+  const result = deliverReply(paneId, text, status, { fingerprint, call });
+  if (result?.stale) {
+    lastStale = result;
+    console.log(`panel not sent · ${where} · ${result.reason === "changed" ? "the dialog changed" : "the dialog was already answered"}`);
+    return "stale";
+  }
   if (herdrFailed(result)) {
     console.error(`panel delivery failed · ${where}: ${herdrErrorText(result)}`);
-    return;
+    return "sent";
   }
   console.log(`panel sent · ${where}`);
+  return "sent";
 }
 
 // The pane moved on without us: the dialog is gone from the screen (answered
@@ -265,10 +290,10 @@ function panelShouldClose() {
   return false;
 }
 
-// Returns "handled" | "resolved" | "at-pane" | "superseded" | "yielded" |
-// "unavailable" | "timeout" | "dismiss" | "skipped". No panel takes the
-// keyboard as it opens; panelFocus says whether it can be clicked into.
-async function runPanel({ options, body, timeoutMs, fingerprint }) {
+// Returns "handled" | "stale" | "resolved" | "at-pane" | "superseded" |
+// "yielded" | "unavailable" | "timeout" | "dismiss" | "skipped". No panel takes
+// the keyboard as it opens; panelFocus says whether it can be clicked into.
+async function runPanel({ options, body, timeoutMs, fingerprint, call }) {
   if (userAtPane(paneId)) {
     console.log(`panel skipped · ${where} · pane is on screen`);
     return "skipped";
@@ -284,6 +309,7 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
     until: panelShouldClose,
     kind: status === "blocked" ? "blocked" : "report",
     focus: panelFocus({ status }),
+    callId: call?.id,
   });
   if (result.kind === "yielded") {
     console.log(`panel yielded · ${where} · a question is already on screen`);
@@ -291,12 +317,10 @@ async function runPanel({ options, body, timeoutMs, fingerprint }) {
   }
   if (result.kind === "button") {
     const option = options[result.index];
-    deliverFromPanel(option?.send ?? String(result.index + 1), fingerprint);
-    return "handled";
+    return deliverFromPanel(option?.send ?? String(result.index + 1), fingerprint, call) === "stale" ? "stale" : "handled";
   }
   if (result.kind === "text") {
-    deliverFromPanel(result.text, fingerprint);
-    return "handled";
+    return deliverFromPanel(result.text, fingerprint, call) === "stale" ? "stale" : "handled";
   }
   if (result.kind === "resolved") {
     console.log(`panel closed · ${where} · ${result.reason}`);
@@ -320,6 +344,7 @@ async function pingRemote(screen, doneBody, { replyTo } = {}) {
   const dialogBacked = status === "blocked" && !hookAuthoritative;
   const options = dialogChoices(screen, { hookAuthoritative: !dialogBacked });
   const fingerprint = dialogBacked ? dialogFingerprint(screen) : undefined;
+  const call = dialogBacked ? dialogCall(screen) : undefined;
   // With drover, the main session's own dialog reads "主会话在等你确认" and
   // carries no location line; every other pane's ping is as it always was.
   const mainLayout = role === "main" && status === "blocked";
@@ -342,6 +367,7 @@ async function pingRemote(screen, doneBody, { replyTo } = {}) {
         channel,
         text,
         layout: mainLayout ? "main" : undefined,
+        call,
       }),
   });
 }
@@ -390,6 +416,7 @@ if (role === "supervisor" || role === "worker") {
       kind: agent.kind,
       where,
       fingerprint: hookAuthoritative ? undefined : dialogFingerprint(screen),
+      call: dialogCall(screen),
       thresholdSec,
     });
     console.log(
@@ -420,11 +447,30 @@ if (status === "blocked") {
   // no buttons anywhere, only free text.
   const panelOptions = dialogChoices(screen, { hookAuthoritative });
   const fingerprint = hookAuthoritative ? undefined : dialogFingerprint(screen);
-  const pingedAtOnce = Boolean(waitingChat);
+  const call = dialogCall(screen);
+  // Herdr can report `blocked` again for a dialog that never went away (seen:
+  // the main session's one WebFetch call, 35 s apart, two cards). The call is
+  // what says it is the same dialog. A card for it that can still be pressed,
+  // or a panel for it that is still open, is already in front of the user,
+  // and a second one is noise; a card that was spent (refused as stale,
+  // replaced) does not count, so the user is never left without one.
+  const shown = alreadyShown(paneId, call);
+  if (shown === "panel") {
+    console.log(`not sent · ${where} · a panel for this call is already open`);
+    process.exit(0);
+  }
+  const alreadyPinged = shown === "card";
+  if (alreadyPinged) {
+    console.log(`not sent · ${where} · already pinged for this call`);
+  }
+  const pingedAtOnce = Boolean(waitingChat) && !alreadyPinged;
   if (pingedAtOnce) {
     console.log(`blocked · ${where} · a ${waitingChat.channel} message is waiting for this session, pinging at once`);
     await pingRemote(screen, undefined, { replyTo: replyToChat });
   }
+  // The phone has a card for this dialog either way: no ping after the wait.
+  const phoneHasIt = pingedAtOnce || alreadyPinged;
+  const first = { screen, options: panelOptions, fingerprint, call };
   if (usePanel && delayMs > 0) {
     // The panel replaces the blocked wait: answer on the desktop, or let it
     // time out and fall through to the phone. If the user is (or arrives) at
@@ -434,49 +480,14 @@ if (status === "blocked") {
       process.exit(0);
     }
     const started = markBlockedDelay(paneId);
-    // A multi-question form answers one tab at a time and never leaves
-    // `blocked`, so Herdr sends no second event: without following it here, the
-    // panel would deliver one answer and vanish, leaving the rest of the form to
-    // the terminal. Each answer is followed by whatever question replaces it.
-    let live = { screen, options: panelOptions, fingerprint };
-    let outcome;
-    for (let answered = 0; ; answered++) {
-      outcome = await runPanel({
-        options: live.options,
-        body: blockedBody(live.screen),
-        timeoutMs: delayMs,
-        fingerprint: live.fingerprint,
-      });
-      if (outcome !== "handled" || hookAuthoritative) {
-        break;
-      }
-      if (answered + 1 >= MAX_FORM_ANSWERS) {
-        console.log(`panel stopped following · ${where} · ${MAX_FORM_ANSWERS} answers`);
-        process.exit(0);
-      }
-      const next = await nextDialog({
-        read: () => readScreen(),
-        status: () => currentPaneStatus(paneId),
-        answered: live.fingerprint,
-      });
-      if (!next) {
-        process.exit(0);
-      }
-      console.log(`panel follows on · ${where}`);
-      live = {
-        screen: next.screen,
-        options: dialogChoices(next.screen, { hookAuthoritative: false }),
-        fingerprint: next.fingerprint,
-      };
-    }
+    const outcome = await followPanel(first, delayMs);
     if (outcome === "superseded") {
       console.log(`not sent · ${where} · a newer event for this pane took the panel over`);
     }
     if (outcome === "handled" || outcome === "superseded" || outcome === "resolved") {
       process.exit(0);
     }
-    if (pingedAtOnce) {
-      // The phone has had this question since it appeared.
+    if (phoneHasIt) {
       process.exit(0);
     }
     if (outcome === "unavailable" || outcome === "skipped" || outcome === "at-pane") {
@@ -489,8 +500,8 @@ if (status === "blocked") {
     process.exit(0);
   }
 
-  if (pingedAtOnce) {
-    // Sent above, without the wait.
+  if (phoneHasIt) {
+    // Sent above, without the wait, or already out.
   } else if (delayMs > 0) {
     const started = markBlockedDelay(paneId);
     await sleep(delayMs);
@@ -499,13 +510,62 @@ if (status === "blocked") {
     await pingRemote(screen);
   }
   if (usePanel && !shouldDebounce(paneId, "panel:blocked")) {
-    await runPanel({
-      options: panelOptions,
-      body: blockedBody(screen),
-      fingerprint,
-    });
+    await followPanel(first, undefined);
   }
   process.exit(0);
+}
+
+// The panel for a blocked dialog, kept up for as long as there is something to
+// answer. A multi-question form answers one tab at a time and never leaves
+// `blocked`, so Herdr sends no second event: without following it here, the
+// panel would deliver one answer and vanish, leaving the rest of the form to
+// the terminal. Each answer is followed by whatever question replaces it. A
+// click that did not land (the dialog changed under it) shows the dialog that
+// is up now rather than closing on nothing; one that found no dialog left ends
+// it, since the question was answered elsewhere. Returns runPanel's outcome.
+async function followPanel(first, timeoutMs) {
+  let live = first;
+  for (let answered = 0; ; answered++) {
+    const outcome = await runPanel({
+      options: live.options,
+      body: blockedBody(live.screen),
+      timeoutMs,
+      fingerprint: live.fingerprint,
+      call: live.call,
+    });
+    if (outcome === "stale") {
+      if (lastStale?.reason !== "changed" || answered + 1 >= MAX_FORM_ANSWERS) {
+        console.log(`panel closed · ${where} · nothing left to answer`);
+        return "resolved";
+      }
+      const screen = lastStale.screen;
+      console.log(`panel follows on · ${where} · showing the dialog that is up now`);
+      live = { screen, options: dialogChoices(screen), fingerprint: dialogFingerprint(screen), call: dialogCall(screen) };
+      continue;
+    }
+    if (outcome !== "handled" || hookAuthoritative) {
+      return outcome;
+    }
+    if (answered + 1 >= MAX_FORM_ANSWERS) {
+      console.log(`panel stopped following · ${where} · ${MAX_FORM_ANSWERS} answers`);
+      return "handled";
+    }
+    const next = await nextDialog({
+      read: () => readScreen(),
+      status: () => currentPaneStatus(paneId),
+      answered: live.fingerprint,
+    });
+    if (!next) {
+      return "handled";
+    }
+    console.log(`panel follows on · ${where}`);
+    live = {
+      screen: next.screen,
+      options: dialogChoices(next.screen, { hookAuthoritative: false }),
+      fingerprint: next.fingerprint,
+      call: dialogCall(next.screen),
+    };
+  }
 }
 
 // A done ping carries the agent's last answer, taken from the agent's own

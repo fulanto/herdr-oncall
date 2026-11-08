@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   blockedSnippet,
+  callState,
   composeMessage,
   consumePairCode,
   currentPaneStatus,
@@ -12,6 +13,7 @@ import {
   mainBlockedText,
   modeEnabled,
   nextDialog,
+  openPanelFor,
   optionKeyboard,
   pendingPair,
   readPaneScreen,
@@ -22,6 +24,7 @@ import {
   screenHasLiveDialog,
   screenHasOpenMenu,
   sendTelegram,
+  sessionDialog,
   sessionDialogBody,
   stateDir,
   statusTitle,
@@ -124,9 +127,57 @@ export function rememberOutbound(record, now = Date.now()) {
     // "main": the main session's ping with drover, which carries no title or
     // location line; a form's next question goes out the same way.
     layout: record.layout,
+    // The tool call the dialog was about, as the session records it
+    // ({ agent, file, id, asks, ... }), when one could be matched: what tells
+    // a redrawn dialog from a different one (staleDialog).
+    call: record.call,
     at: now,
   };
   writeJson(path, store);
+}
+
+// A card that can no longer be used: tapped, refused as stale, or replaced by
+// a newer card for the dialog now on screen. Only a card still in use keeps
+// the hook from sending another one for the same call.
+export function markOutbound(messageId, patch, now = Date.now()) {
+  const path = outboundPath();
+  const store = pruneOutbound(readJson(path, {}), now);
+  const key = String(messageId);
+  if (store[key]) {
+    store[key] = { ...store[key], ...patch };
+    writeJson(path, store);
+  }
+}
+
+// A card already out for this very call that can still be pressed: same pane,
+// same call, not spent, and the call still waiting for its answer.
+export function usableCardFor(paneId, callId, { now = Date.now(), state = callState } = {}) {
+  if (!paneId || !callId) {
+    return undefined;
+  }
+  const store = pruneOutbound(readJson(outboundPath(), {}), now);
+  for (const [messageId, record] of Object.entries(store)) {
+    if (record.paneId === paneId && record.status === "blocked" && !record.spent && record.call?.id === callId && state(record.call) === "open") {
+      return { messageId, ...record };
+    }
+  }
+  return undefined;
+}
+
+// What is already in front of the user for the call this dialog is about:
+// "panel" (a panel for it is open), "card" (a card for it can still be
+// pressed), or undefined, when a new one is due. Herdr can report `blocked`
+// again for a dialog that never went away; only a dialog with a call to go by
+// can be recognised, and a form never is (its call stays the same while its
+// questions change).
+export function alreadyShown(paneId, call, { state = callState, openPanel = openPanelFor, now = Date.now() } = {}) {
+  if (!call?.id || call.asks) {
+    return undefined;
+  }
+  if (openPanel(paneId)?.callId === call.id) {
+    return "panel";
+  }
+  return usableCardFor(paneId, call.id, { state, now }) ? "card" : undefined;
 }
 
 export function lookupOutbound(messageId, now = Date.now()) {
@@ -134,15 +185,16 @@ export function lookupOutbound(messageId, now = Date.now()) {
     return undefined;
   }
   const store = pruneOutbound(readJson(outboundPath(), {}), now);
-  return store[String(messageId)];
+  const hit = store[String(messageId)];
+  return hit ? { ...hit, messageId: String(messageId) } : undefined;
 }
 
 export function lastOutbound(now = Date.now()) {
   const store = pruneOutbound(readJson(outboundPath(), {}), now);
   let latest;
-  for (const record of Object.values(store)) {
+  for (const [messageId, record] of Object.entries(store)) {
     if (!latest || Number(record.at) > Number(latest.at)) {
-      latest = record;
+      latest = { ...record, messageId };
     }
   }
   return latest;
@@ -211,9 +263,24 @@ export function isAgentBlockedError(result) {
 // The gate is the *ping's* status, not the live one: only a blocked ping is
 // about a dialog, while `pane get` lags often enough that a pane it still calls
 // `working` can already have the next dialog drawn on it.
-// Returns a herdr-shaped failure when the screen moved on, undefined to proceed.
+//
+// "The same question" is decided by the tool call the dialog is about when the
+// ping recorded one (`deps.call`), and by the screen's fingerprint otherwise.
+// The fingerprint alone refused a real tap: the main session's WebFetch dialog
+// stayed up, unanswered, while the fingerprint moved (a dialog whose question
+// re-wraps when the pane changes width hashes differently), the tap was called
+// stale and the card died with no way left to answer from the phone. The call
+// does not move: while it has no result, its dialog has not been answered. A
+// form is still judged by the fingerprint, since one call asks every question
+// of the form in place.
+//
+// Returns undefined to go ahead, or a herdr-shaped failure with `stale: true`,
+// `reason` ("changed": a dialog is up but not this one, or which one cannot be
+// told; "gone": no dialog left, it was answered) and the `screen` it was read
+// from, so the caller can offer what is up now instead.
 export function staleDialog(paneId, pingStatus, fingerprint, deps = {}) {
-  if (!fingerprint) {
+  const call = deps.call;
+  if (!fingerprint && !call?.id) {
     return undefined;
   }
   const status = String(pingStatus || "").toLowerCase();
@@ -228,10 +295,36 @@ export function staleDialog(paneId, pingStatus, fingerprint, deps = {}) {
     console.log(`fingerprint unverified · ${paneId}`);
     return undefined;
   }
+  const dialogUp = screenHasLiveDialog(screen) || screenHasOpenMenu(screen);
+  const refuse = (reason) => ({ status: 1, stale: true, reason, screen, stderr: "dialog changed since this ping" });
+  if (call?.id && !call.asks) {
+    const state = (deps.callState ?? callState)(call);
+    if (state === "answered") {
+      return refuse(dialogUp ? "changed" : "gone");
+    }
+    if (state === "open") {
+      if (!dialogUp) {
+        return refuse("gone");
+      }
+      // Two calls can be open at once (one approved and still running); the
+      // dialog up must be this call's. When the screen names no call at all,
+      // the fingerprint below decides.
+      const onScreen = (deps.screenCall ?? ((text) => sessionDialog(paneId, text, { run: deps.run ?? runHerdr })?.call))(screen);
+      if (onScreen?.id === call.id) {
+        return undefined;
+      }
+      if (onScreen?.id) {
+        return refuse("changed");
+      }
+    }
+  }
+  if (!fingerprint) {
+    return undefined;
+  }
   if (screenHasLiveDialog(screen) && dialogFingerprint(screen) === fingerprint) {
     return undefined;
   }
-  return { status: 1, stale: true, stderr: "dialog changed since this ping" };
+  return refuse(dialogUp ? "changed" : "gone");
 }
 
 // How a reply is typed depends on whether something is waiting for a keypress,
@@ -430,13 +523,18 @@ export async function finishDelivery(target, text, deps) {
   const answered = target.status === "blocked" ? liveDialog(target.paneId, deps) : undefined;
   const result = deliverReply(target.paneId, text, target.status, {
     fingerprint: replyFingerprint(target),
+    call: target.explicit ? target.call : undefined,
     run: deps.run,
+    callState: deps.callState,
+    screenCall: deps.screenCall,
   });
   if (result?.stale) {
-    await ack(`stale · ${target.where || target.paneId} · dialog changed, not sent`);
-    return { ok: false, stale: true, paneId: target.paneId };
+    return answerStale(target, result, { ...deps, ack });
   }
   const ok = !herdrFailed(result);
+  if (ok && target.explicit && target.messageId && target.status === "blocked") {
+    markOutbound(target.messageId, { spent: "sent" });
+  }
   await ack(
     ok
       ? `sent · ${target.where || target.paneId}`
@@ -447,6 +545,67 @@ export async function finishDelivery(target, text, deps) {
     outcome.followed = true;
   }
   return outcome;
+}
+
+// A reply that was not pressed must not leave the user with a dead card. The
+// card it came from is spent either way. With a dialog still up (a different
+// one, or one that cannot be told from the screen), a new card for it goes
+// out at once, so there is always something to press; with no dialog left,
+// the old card says the question was already dealt with, and that is the one
+// case where nothing to press is right.
+async function answerStale(target, result, deps) {
+  const { channel, ack } = deps;
+  const run = deps.run ?? runHerdr;
+  const where = target.where || target.paneId;
+  if (target.messageId) {
+    markOutbound(target.messageId, { spent: "stale" });
+  }
+  if (result.reason !== "changed") {
+    console.log(`stale · ${where} · the dialog was already answered, not sent`);
+    await ack(`这个确认已经处理过了 · ${where}`);
+    return { ok: false, stale: true, handled: true, paneId: target.paneId };
+  }
+  const screen = result.screen;
+  const dialog = sessionDialog(target.paneId, screen, { run });
+  const existing = dialog?.call?.id ? usableCardFor(target.paneId, dialog.call.id, { state: deps.callState ?? callState }) : undefined;
+  if (existing) {
+    console.log(`stale · ${where} · dialog changed, not sent; it already has a card`);
+    await ack(`弹框变了，没按 · ${where}\n现在的弹框已经有一张卡片了，请点那一张`);
+    return { ok: false, stale: true, paneId: target.paneId };
+  }
+  console.log(`stale · ${where} · dialog changed, not sent; a new card for the one on screen`);
+  // Said first, so on a chat where the ack is its own message it sits above
+  // the card it points to.
+  await ack(`弹框变了，没按 · ${where}\n已换成下面这张新卡片`);
+  const title = target.title || statusTitle({}, {}, "blocked");
+  const options = dialogChoices(screen);
+  let body = dialog?.body;
+  if (!body) {
+    saveScreen("last-blocked-screen.txt", screen);
+    body = blockedSnippet(screen);
+  }
+  const message = target.layout === "main" ? mainBlockedText(body) : composeMessage(title, where, "blocked", body);
+  try {
+    const messageId = await channel.ping(message, { options });
+    rememberOutbound({
+      messageId,
+      paneId: target.paneId,
+      status: "blocked",
+      where: target.where,
+      title,
+      fingerprint: dialogFingerprint(screen),
+      options,
+      channel: channel.name,
+      text: message,
+      layout: target.layout,
+      call: dialog?.call,
+    });
+    return { ok: false, stale: true, replaced: true, paneId: target.paneId };
+  } catch (error) {
+    console.error(`replacement card failed · ${where}: ${describeError(error)}`);
+    await channel.reply(`新卡片没发出去（${describeError(error)}），请回到电脑处理`).catch(() => {});
+    return { ok: false, stale: true, paneId: target.paneId };
+  }
 }
 
 function liveDialog(paneId, deps) {

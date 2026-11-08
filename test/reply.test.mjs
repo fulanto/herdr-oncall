@@ -429,7 +429,7 @@ test("an explicit reply is bound to its dialog, a bare message is not", async ()
       inboundDeps(MOVED_ON, explicitCalls, explicitSent),
     );
     assert.equal(explicit.stale, true);
-    assert.match(explicitSent.at(-1), /^stale · asr-service · main · dialog changed, not sent$/);
+    assert.match(explicitSent.at(-1), /^这个确认已经处理过了 · asr-service · main$/);
     assert.equal(
       explicitCalls.some((call) => call.includes("send-keys") || call.includes("agent prompt")),
       false,

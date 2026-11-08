@@ -383,7 +383,7 @@ test("Codex's open calls are this turn's calls with no output", () => {
     call("c2", "exec_command", { cmd: "git push --force", workdir: "/repo", justification: "Publish the fix" }),
   ];
   assert.deepEqual(codexPendingCalls(records), [
-    { name: "exec_command", input: { cmd: "git push --force", workdir: "/repo", justification: "Publish the fix" } },
+    { id: "c2", name: "exec_command", input: { cmd: "git push --force", workdir: "/repo", justification: "Publish the fix" } },
   ]);
   assert.deepEqual(codexPendingCalls([...records, output("c2"), codex.complete("pushed")]), []);
 });

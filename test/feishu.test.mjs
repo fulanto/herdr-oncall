@@ -299,7 +299,8 @@ test("a quoted reply is bound to its dialog, a bare message is not", async () =>
     );
     const stale = await quoted.work();
     assert.equal(stale.stale, true);
-    assert.deepEqual(sent.map((message) => message.text), ["stale · asr-service · main · dialog changed, not sent"]);
+    // No dialog left on screen: it was answered, and the card says so.
+    assert.deepEqual(sent.map((message) => message.text), ["这个确认已经处理过了 · asr-service · main"]);
     assert.ok(!calls.some((call) => call.includes("send-keys") || call.includes("agent prompt")));
 
     const bareCalls = [];

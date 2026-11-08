@@ -2,7 +2,7 @@ import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, rea
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { envFlag } from "./config.mjs";
-import { dialogQuestion } from "./format.mjs";
+import { blockedSnippet, dialogQuestion } from "./format.mjs";
 import { runHerdr, sleep } from "./paths.mjs";
 
 // A done ping carries the agent's last answer, and the agent's own session
@@ -599,7 +599,7 @@ export function claudePendingCalls(records, { sidechain = false } = {}) {
       continue;
     }
     const open = blocks.filter((block) => block?.type === "tool_use" && !answered.has(block.id));
-    calls.unshift(...open.map((block) => ({ name: block.name, input: block.input ?? {} })));
+    calls.unshift(...open.map((block) => ({ id: block.id, name: block.name, input: block.input ?? {} })));
   }
   return calls;
 }
@@ -635,7 +635,7 @@ export function codexPendingCalls(records) {
       } else {
         input = { text: String(payload.input ?? "") };
       }
-      calls.unshift({ name: payload.name, input });
+      calls.unshift({ id: payload.call_id, name: payload.name, input });
     }
   }
   return calls;
@@ -778,20 +778,24 @@ function squash(text) {
     .toLowerCase();
 }
 
-// The open call this screen's dialog is about, described, or undefined.
-// A witness has to be long enough to mean something; only its start is
-// compared, since the screen may cut a long line short. `by` names the
-// subagent whose transcript `records` is, as the dialog itself does ("Bash
-// command · from the code-writer agent").
+// The open call this screen's dialog is about, described, with the call's own
+// `id` and `name`; or undefined. A witness has to be long enough to mean
+// something; only its start is compared, since the screen may cut a long line
+// short. The dialog itself is searched first and the whole screen after: with
+// two calls open, the transcript above the dialog can show the other one's
+// command too. `by` names the subagent whose transcript `records` is, as the
+// dialog itself does ("Bash command · from the code-writer agent").
 export function pendingDialog(agent, records, screen, { by, sidechain = false } = {}) {
   const calls =
     agent === "claude" ? claudePendingCalls(records, { sidechain }) : agent === "codex" ? codexPendingCalls(records) : [];
-  const onScreen = squash(screen);
-  for (const call of calls) {
-    for (const candidate of describeCall(agent, call)) {
-      const witness = squash(candidate.witness).slice(0, 40);
-      if (witness.length >= 4 && onScreen.includes(witness)) {
-        return by ? { ...candidate, text: candidate.text.replace(/^[^\n]*/, (head) => `${head} · from the ${by} agent`) } : candidate;
+  for (const where of [squash(blockedSnippet(screen)), squash(screen)]) {
+    for (const call of calls) {
+      for (const candidate of describeCall(agent, call)) {
+        const witness = squash(candidate.witness).slice(0, 40);
+        if (witness.length >= 4 && where.includes(witness)) {
+          const found = { ...candidate, call: { id: call.id, name: call.name } };
+          return by ? { ...found, text: found.text.replace(/^[^\n]*/, (head) => `${head} · from the ${by} agent`) } : found;
+        }
       }
     }
   }
@@ -823,17 +827,21 @@ export function claudeSubagentFiles(sessionPath, limit = SUBAGENT_FILES) {
     .slice(0, limit);
 }
 
-// The body of a blocked ping from the pane's session: the call the dialog is
-// about, then the question the dialog asks in words. Undefined when the
-// session cannot be found or none of its open calls is the one on screen —
-// the caller then reads the body off the screen as before.
-export function sessionDialogBody(paneId, screen, { run = runHerdr, env = process.env } = {}) {
+// The dialog on screen as the pane's session has it: `body`, the call it is
+// about, then the question the dialog asks in words; and `call`, which call
+// that is ({ agent, file, id, name, asks, sidechain }), the identity the reply
+// path checks before pressing anything. Undefined when the session cannot be
+// found or none of its open calls is the one on screen — the caller then
+// reads the body off the screen as before, and has no identity to go by.
+export function sessionDialog(paneId, screen, { run = runHerdr, env = process.env } = {}) {
   const session = paneSession(paneId, { run, env });
   const path = sessionFile(session, env);
   if (!path) {
     return undefined;
   }
   let found = pendingDialog(session.agent, readSessionTail(path), screen);
+  let file = path;
+  let sidechain = false;
   if (!found && session.agent === "claude") {
     for (const subagent of claudeSubagentFiles(path)) {
       found = pendingDialog("claude", readSessionTail(subagent.path, SUBAGENT_TAIL_BYTES), screen, {
@@ -841,6 +849,8 @@ export function sessionDialogBody(paneId, screen, { run = runHerdr, env = proces
         sidechain: true,
       });
       if (found) {
+        file = subagent.path;
+        sidechain = true;
         break;
       }
     }
@@ -849,5 +859,50 @@ export function sessionDialogBody(paneId, screen, { run = runHerdr, env = proces
     return undefined;
   }
   const question = found.asks ? "" : dialogQuestion(screen);
-  return capAnswer(question ? `${found.text}\n\n${question}` : found.text);
+  const call = found.call?.id
+    ? { agent: session.agent, file, id: found.call.id, name: found.call.name, asks: Boolean(found.asks), sidechain }
+    : undefined;
+  return { body: capAnswer(question ? `${found.text}\n\n${question}` : found.text), call };
+}
+
+// The body of a blocked ping from the pane's session (see sessionDialog).
+export function sessionDialogBody(paneId, screen, options) {
+  return sessionDialog(paneId, screen, options)?.body;
+}
+
+// Whether a call a ping was about is still waiting: "open" (no result yet, so
+// whatever dialog it raised has not been answered), "answered" (it has a
+// result: approved and run, or refused), or "unknown" (the record cannot be
+// read, or no longer holds the call), when the caller falls back to the
+// screen. Claude Code writes the call when the model emits it and its result
+// only once the dialog is answered and the tool has run; Codex the same with
+// its call_id and a `*_output`.
+export function callState(call) {
+  if (!call?.file || !call?.id) {
+    return "unknown";
+  }
+  const records = readSessionTail(call.file, call.sidechain ? SUBAGENT_TAIL_BYTES : TAIL_BYTES);
+  let seen = false;
+  for (const record of records) {
+    if (call.agent === "codex") {
+      const payload = record?.type === "response_item" ? record.payload ?? {} : {};
+      if (payload.call_id !== call.id) {
+        continue;
+      }
+      if (/_output$/.test(payload.type ?? "")) {
+        return "answered";
+      }
+      seen = true;
+      continue;
+    }
+    const blocks = Array.isArray(record?.message?.content) ? record.message.content : [];
+    for (const block of blocks) {
+      if (block?.type === "tool_use" && block.id === call.id) {
+        seen = true;
+      } else if (block?.type === "tool_result" && block.tool_use_id === call.id) {
+        return "answered";
+      }
+    }
+  }
+  return seen ? "open" : "unknown";
 }

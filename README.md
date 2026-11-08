@@ -72,7 +72,7 @@ herdr plugin action invoke unpair-feishu --plugin com.codreamer.herdr.oncall
 
 That empties the `FEISHU_*` keys in `.env`, takes `feishu` out of `CHANNEL` (back to `telegram` if it was the only one), withdraws a scan still in progress so it cannot pair the machine afterwards, and messages the old bot `unpaired`. The old bot itself stays in Feishu until you delete it on the Feishu open platform. The next `pair-feishu` creates a new one.
 
-A blocked ping arrives as a card with one button per option; the card replaces its buttons with what was sent once you tap. To answer with text, reply to the ping (quote it); a plain message goes to the pane the last ping was about (with drover, to the main session instead: see [With drover](#with-drover)). Receiving replies needs Node 22 or later, since Feishu delivers them over a WebSocket.
+A blocked ping arrives as a card with one button per option; the card replaces its buttons with what was sent once you tap. A tap is checked against the dialog first: by the tool call the dialog is about, as the agent's session records it (a call still waiting for its result is the same dialog however the screen was redrawn), and by what is on screen when there is no call to go by. If a different dialog is up by then, nothing is pressed: the card says so and a new card for the dialog now on screen arrives below it, so there is always something to tap; if the dialog was already answered, the card says that instead. To answer with text, reply to the ping (quote it); a plain message goes to the pane the last ping was about (with drover, to the main session instead: see [With drover](#with-drover)). Receiving replies needs Node 22 or later, since Feishu delivers them over a WebSocket.
 
 ### Telegram
 
@@ -123,6 +123,7 @@ Every blocked or done event leaves a line in `herdr plugin log list --plugin com
 | `panel sent · <where>` / `panel closed · <where> · …` | answered on the panel, or in the terminal while it was up |
 | `skipped · <where> · blocked but no dialog on screen · tail: …` | Herdr said blocked but no prompt was recognised on screen; the screen is saved to `last-skipped-screen.txt` |
 | `debounced · <where> · …` | the same pane and status within `DEBOUNCE_MS` |
+| `not sent · <where> · already pinged for this call` | Herdr reported the same dialog (the same tool call, still unanswered) again, and its card can still be tapped |
 | `off · …` / `ignored · … · not in NOTIFY_ON=…` | Oncall is toggled off, or `NOTIFY_ON` leaves the status out |
 | `quiet · worker · <name> · <where> · done (supervised)` | with drover: an orchestrator's or a worker's turn ended; the layer above relays it |
 | `escalation armed · worker · <name> · <where> · pings after 600s if nobody answers` | with drover: a dialog the layer above should answer; the poller pings if it is still there then |

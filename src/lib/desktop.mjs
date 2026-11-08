@@ -171,16 +171,31 @@ function panelRecord(entry) {
   }
   if (typeof entry === "object") {
     const pid = Number(entry.pid ?? 0);
-    return pid > 1 ? { pid, kind: entry.kind } : undefined;
+    return pid > 1 ? { pid, kind: entry.kind, callId: entry.callId } : undefined;
   }
   const pid = Number(entry);
   return pid > 1 ? { pid, kind: undefined } : undefined;
 }
 
-export function rememberPanel(paneId, pid, kind) {
+export function rememberPanel(paneId, pid, kind, callId) {
   const store = readPanelPids();
-  store[paneId] = { pid, kind };
+  store[paneId] = { pid, kind, ...(callId ? { callId } : {}) };
   writePanelPids(store);
+}
+
+// The panel standing on this pane right now, { pid, kind, callId }, or
+// undefined. `callId` is the tool call its dialog is about, when known.
+export function openPanelFor(paneId) {
+  const record = panelRecord(readPanelPids()[paneId]);
+  if (!record) {
+    return undefined;
+  }
+  try {
+    process.kill(record.pid, 0);
+    return record;
+  } catch {
+    return undefined;
+  }
 }
 
 export function forgetPanel(paneId, pid) {
@@ -275,6 +290,7 @@ export function showPanel({
   kind,
   qr,
   focus = "click",
+  callId,
 }) {
   if (!existsSync(binary)) {
     return Promise.resolve({ kind: "unavailable" });
@@ -302,7 +318,7 @@ export function showPanel({
       return;
     }
     if (paneId) {
-      rememberPanel(paneId, child.pid, kind);
+      rememberPanel(paneId, child.pid, kind, callId);
     }
     let stdout = "";
     let stderr = "";

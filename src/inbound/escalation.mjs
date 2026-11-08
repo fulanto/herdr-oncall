@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   blockedSnippet,
+  callState,
   currentPaneStatus,
   dialogChoices,
   dialogFingerprint,
@@ -18,6 +19,7 @@ import {
   runHerdr,
   saveScreen,
   screenHasLiveDialog,
+  sessionDialog,
   sessionDialogBody,
   showPanel,
   sleep,
@@ -56,18 +58,29 @@ function writeEscalations(store) {
   writeFileSync(storePath(), JSON.stringify(store), "utf8");
 }
 
+// Whether two sightings are the same dialog: by the tool call when both have
+// one (a form excepted, since one call asks all its questions), else by the
+// screen's fingerprint, which moves when the pane is redrawn at another width.
+function sameCall(a, b) {
+  return Boolean(a?.id && b?.id && !a.asks && !b.asks);
+}
+
 // The hook's side. The same dialog seen again (Herdr fires `blocked` more than
 // once for one) keeps its original start, so the clock is not reset by noise;
 // a different dialog starts over. Returns { kept, record }.
-export function armEscalation({ paneId, role, name, kind, where, fingerprint, thresholdSec }, now = Date.now()) {
+export function armEscalation({ paneId, role, name, kind, where, fingerprint, call, thresholdSec }, now = Date.now()) {
   const store = readEscalations();
   const previous = store[paneId];
-  if (previous && previous.fingerprint === fingerprint && previous.role === role) {
+  const same =
+    previous &&
+    previous.role === role &&
+    (sameCall(previous.call, call) ? previous.call.id === call.id : previous.fingerprint === fingerprint);
+  if (same) {
     store[paneId] = { ...previous, name, kind, where };
     writeEscalations(store);
     return { kept: true, record: store[paneId] };
   }
-  const record = { paneId, role, name, kind, where, fingerprint, startedAt: now, armedThresholdSec: thresholdSec };
+  const record = { paneId, role, name, kind, where, fingerprint, call, startedAt: now, armedThresholdSec: thresholdSec };
   store[paneId] = record;
   writeEscalations(store);
   return { kept: false, record };
@@ -165,7 +178,7 @@ function dialogBody(record, screen, run) {
 }
 
 // Default edges, for the poller. Tests pass their own.
-function defaultPing({ record, text, options, fingerprint, channels }) {
+function defaultPing({ record, text, options, fingerprint, call, channels }) {
   return pingChannels(channels, text, {
     status: "blocked",
     options,
@@ -182,13 +195,17 @@ function defaultPing({ record, text, options, fingerprint, channels }) {
         options,
         channel,
         text,
+        call,
       }),
   });
 }
 
 // No phone paired: the desktop panel is the one way left to reach the user.
 // It is not waited on by the pass, since it stays up for its whole timeout.
-function defaultPanel({ record, text, options, fingerprint, run, readScreen }) {
+// It closes when no dialog is left on screen (twice in a row), not when the
+// dialog is merely redrawn; a click that did not land (the dialog changed
+// under it) reopens it on the dialog that is up now.
+function defaultPanel({ record, text, options, fingerprint, call, run, readScreen }, reopened = 0) {
   let gone = 0;
   showPanel({
     paneId: record.paneId,
@@ -198,12 +215,13 @@ function defaultPanel({ record, text, options, fingerprint, run, readScreen }) {
     options,
     kind: "blocked",
     focus: panelFocus({ status: "blocked" }),
+    callId: call?.id,
     until: () => {
       const screen = readScreen(record.paneId);
       if (!String(screen).trim()) {
         return false;
       }
-      gone = screenHasLiveDialog(screen) && dialogFingerprint(screen) === fingerprint ? 0 : gone + 1;
+      gone = screenHasLiveDialog(screen) ? 0 : gone + 1;
       return gone >= 2 ? "moved-on" : false;
     },
   })
@@ -213,7 +231,29 @@ function defaultPanel({ record, text, options, fingerprint, run, readScreen }) {
         console.log(`escalation panel closed · ${label(record)} · ${result.reason || result.kind}`);
         return;
       }
-      const delivered = deliverReply(record.paneId, typed, "blocked", { fingerprint, run });
+      const delivered = deliverReply(record.paneId, typed, "blocked", { fingerprint, call, run });
+      if (delivered?.stale) {
+        if (delivered.reason === "changed" && reopened < 5) {
+          const screen = delivered.screen;
+          console.log(`escalation panel not sent · ${label(record)} · the dialog changed, showing the one up now`);
+          const body = text.split("\n").slice(0, 3).concat("", blockedSnippet(screen)).join("\n");
+          defaultPanel(
+            {
+              record,
+              text: body,
+              options: dialogChoices(screen),
+              fingerprint: dialogFingerprint(screen),
+              call: sessionDialog(record.paneId, screen, { run })?.call,
+              run,
+              readScreen,
+            },
+            reopened + 1,
+          );
+        } else {
+          console.log(`escalation panel not sent · ${label(record)} · the dialog was already answered`);
+        }
+        return;
+      }
       console.log(
         herdrFailed(delivered)
           ? `escalation panel delivery failed · ${label(record)}: ${herdrErrorText(delivered)}`
@@ -237,6 +277,8 @@ export async function checkEscalations({
   ping = defaultPing,
   panel = defaultPanel,
   body = (record, screen) => dialogBody(record, screen, run),
+  state = callState,
+  screenCall = (paneId, screen) => sessionDialog(paneId, screen, { run })?.call,
   wait = sleep,
   recheckMs = 1000,
   log = console.log,
@@ -255,10 +297,26 @@ export async function checkEscalations({
       outcomes.push({ paneId, outcome: "cleared" });
       continue;
     }
-    if (seen.fingerprint !== record.fingerprint) {
+    // The same dialog, by its call when there is one: a call still waiting for
+    // its result has not been answered, however its dialog is redrawn (an
+    // orchestrator's screen is redrawn at another width as easily as anyone's,
+    // and its clock kept starting over, so it could never come due).
+    let same = seen.fingerprint === record.fingerprint;
+    if (record.call?.id && !record.call.asks) {
+      const callNow = state(record.call);
+      if (callNow === "open") {
+        const onScreen = screenCall(paneId, seen.screen);
+        same = !onScreen?.id || onScreen.id === record.call.id;
+      } else if (callNow === "answered") {
+        same = false;
+      }
+    }
+    if (!same) {
+      const call = screenCall(paneId, seen.screen);
       settle(paneId, record, (current) => ({
         ...current,
         fingerprint: seen.fingerprint,
+        call,
         startedAt: now,
         escalatedAt: undefined,
         heldAt: undefined,
@@ -299,13 +357,15 @@ export async function checkEscalations({
     // Marked before the send, so a slow or failed ping is still only tried once
     // per dialog: a second identical escalation is worse than none.
     settle(paneId, record, (current) => ({ ...current, escalatedAt: now }));
+    // The card carries the dialog as it is drawn now, and the call it is about.
+    const fingerprint = seen.fingerprint ?? record.fingerprint;
     if (channels.length) {
       log(`escalated · ${label(record)} · after ${stuckFor(elapsedMs)}`);
-      await ping({ record, text, options, fingerprint: record.fingerprint, channels, run, readScreen });
+      await ping({ record, text, options, fingerprint, call: record.call, channels, run, readScreen });
       outcomes.push({ paneId, outcome: "pinged" });
     } else if (panelReady) {
       log(`escalated · ${label(record)} · after ${stuckFor(elapsedMs)} · desktop panel, no phone channel paired`);
-      panel({ record, text, options, fingerprint: record.fingerprint, run, readScreen });
+      panel({ record, text, options, fingerprint, call: record.call, run, readScreen });
       outcomes.push({ paneId, outcome: "panel" });
     } else {
       log(`not sent · ${label(record)} · escalation due, but no paired phone channel and no panel`);
