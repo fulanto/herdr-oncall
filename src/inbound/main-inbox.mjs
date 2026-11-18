@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   attachmentLine,
@@ -21,6 +21,7 @@ import {
   setMode,
   sleep,
   stateDir,
+  textParts,
   undeliveredNote,
 } from "../lib/index.mjs";
 import {
@@ -47,8 +48,15 @@ import {
 // message is prefixed, which keeps its first character a `[`, and stripped of
 // control characters. Newlines stay: both agents take a multi-line paste as
 // one submission.
+//
+// The chat is not the only way in: drover's task board, on this machine, sends
+// what the user clicked (`[看板] 全部收尾：…`) through send-main.mjs, the same
+// way. The board is not a chat. Its notice goes back on send-main's output,
+// there is no chat to answer on, so nothing waits for its answer in
+// main-pending.json, and the chat's off switch does not hold it.
 
-export const CHAT_PREFIX = { feishu: "[飞书] ", telegram: "[Telegram] " };
+export const BOARD = "board";
+export const CHAT_PREFIX = { feishu: "[飞书] ", telegram: "[Telegram] ", [BOARD]: "[看板] " };
 export const MAX_CHARS = 2000;
 // A main session that is restarting, or just ran /clear, has no name for a
 // second or two while drover registers it again; a Codex one is registered
@@ -308,6 +316,29 @@ function waitingReason(verdict, settings) {
   }
 }
 
+// The board shows its notice for a few seconds after the click: one line, and
+// nothing a chat would do about it (no /send, no 确认通知 to answer first).
+function boardStashNotice(verdict, settings) {
+  switch (verdict.state) {
+    case "blocked":
+      return "主会话在等确认，已排队，确认完自动送";
+    case "draft":
+      return "主会话输入框里有没发出的内容，已排队，发出或清空后自动送";
+    case "codex-busy":
+      return "主会话正在处理上一件事，已排队，它停下就送";
+    case "absent":
+      return `没找到主会话（herdr 里名为 ${settings.mainAgentName} 的 agent），已排队，${ABSENT_GRACE_MS / 1000} 秒内没出现就不送了`;
+    default:
+      return "已排队";
+  }
+}
+
+// The off switch holds what came from the chat. The board's messages go past
+// it, and past the chat messages it holds in front of them.
+function mayGoNow(item, enabled) {
+  return enabled || item.channel === BOARD;
+}
+
 // ---------------------------------------------------------------------------
 // The files: the inbox of messages waiting to go in, and the messages that
 // went in and still wait for their answer, which the notify hook finds in the
@@ -343,6 +374,75 @@ export function readInbox() {
 
 function writeInbox(items) {
   writeJson(inboxPath(), items);
+}
+
+// The inbox and the main session's input box had one writer, the poller, whose
+// serial() queue kept its deliveries apart. send-main.mjs is a second process,
+// and without a lock a click that lands while the poller drains is lost: the
+// poller writes back the inbox it read before the click was added. So reading
+// the inbox, typing into the main session and writing the inbox back happen
+// under this lock, in both processes; replies to the chat go out after it is
+// released. A lock whose holder is gone, or that is older than
+// INBOX_LOCK_STALE_MS (no delivery takes that long), is taken over.
+export const INBOX_LOCK_WAIT_MS = 20_000;
+const INBOX_LOCK_STALE_MS = 60_000;
+
+function lockPath() {
+  return join(stateDir(), "main-inbox.lock");
+}
+
+function lockAbandoned(path) {
+  let pid;
+  let age;
+  try {
+    pid = Number(readFileSync(path, "utf8").trim());
+    age = Date.now() - statSync(path).mtimeMs;
+  } catch {
+    // Released while we looked: the next try takes it.
+    return false;
+  }
+  if (age > INBOX_LOCK_STALE_MS) {
+    return true;
+  }
+  if (!(pid > 1)) {
+    // Created a moment ago, its pid not written yet.
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return error?.code === "ESRCH";
+  }
+}
+
+export async function withInboxLock(work, { timeoutMs = INBOX_LOCK_WAIT_MS, wait = sleep } = {}) {
+  const path = lockPath();
+  mkdirSync(dirname(path), { recursive: true });
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      writeFileSync(path, `${process.pid}\n`, { flag: "wx" });
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+    }
+    if (lockAbandoned(path)) {
+      rmSync(path, { force: true });
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`主会话的投递正忙，等了 ${Math.round(timeoutMs / 1000)} 秒还没轮到`);
+    }
+    await wait(100);
+  }
+  try {
+    return await work();
+  } finally {
+    rmSync(path, { force: true });
+  }
 }
 
 export function rememberPendingAnswer({ id, paneId, channel, messageId, text }, now = Date.now()) {
@@ -419,10 +519,15 @@ function typeIntoMain(paneId, item, run) {
 
 // A message for the main session (its parts, see lib/chat-images.mjs, images
 // already fetched): sent now when it can go in, otherwise kept in the inbox
-// for the poller to send when it can. Always says which on the channel it came
-// from, except while the main session's name is missing, when the poller
-// decides within ABSENT_GRACE_MS. Returns the outcome.
-export async function routeToMain(parts, { channel, messageId, settings = roleSettings(), run = runHerdr, now = Date.now(), log = console.log } = {}) {
+// for the poller to send when it can. A chat always hears which, as a reply,
+// except while the main session's name is missing, when the poller decides
+// within ABSENT_GRACE_MS; the board's message gets its notice in the result
+// instead. `enabled` is the off switch, which a chat message never gets here
+// past. Returns the outcome.
+export async function routeToMain(
+  parts,
+  { channel, messageId, settings = roleSettings(), run = runHerdr, now = Date.now(), log = console.log, enabled = true } = {},
+) {
   const clean = composeForAgent(parts);
   if (!clean.text) {
     return { skipped: "empty" };
@@ -437,43 +542,72 @@ export async function routeToMain(parts, { channel, messageId, settings = roleSe
     messageId: messageId === undefined || messageId === null ? undefined : String(messageId),
     at: now,
   };
+  const placed = await withInboxLock(() => placeInMain(item, { settings, run, now, log, enabled }));
+  if (item.channel === BOARD) {
+    return { ...placed.outcome, notice: placed.board };
+  }
+  if (placed.chat) {
+    await channel.reply(placed.chat);
+  }
+  return placed.outcome;
+}
+
+// routeToMain's decision, under the inbox lock: the outcome, and what to tell
+// a chat ("" for nothing) or the board.
+function placeInMain(item, { settings, run, now, log, enabled }) {
   const waiting = readInbox();
-  if (waiting.length) {
-    // Order is kept: nothing overtakes a message that is already waiting.
-    writeInbox([...waiting, { ...item, stashedAt: now, reason: "queued" }]);
-    log(logLine("stashed", item, `behind ${waiting.length} waiting`));
-    await channel.reply(`你这条已暂存，排在前面 ${waiting.length} 条后面，主会话能接收时按顺序送${itemNote(item)}`);
-    return { ok: true, stashed: true, reason: "queued" };
+  const stash = (reason, extra = {}) => writeInbox([...waiting, { ...item, stashedAt: now, reason, ...extra }]);
+  // Order is kept: nothing overtakes a message that is already waiting, except
+  // one the off switch holds.
+  const ahead = waiting.filter((entry) => mayGoNow(entry, enabled)).length;
+  if (ahead) {
+    stash("queued");
+    log(logLine("stashed", item, `behind ${ahead} waiting`));
+    return {
+      outcome: { ok: true, stashed: true, reason: "queued" },
+      chat: `你这条已暂存，排在前面 ${ahead} 条后面，主会话能接收时按顺序送${itemNote(item)}`,
+      board: `前面还有 ${ahead} 条在排队，已排在后面，按顺序送${itemNote(item)}`,
+    };
   }
   const verdict = mainState({ settings, run });
   if (verdict.state === "ready" || verdict.state === "working") {
     const typed = typeIntoMain(verdict.main.paneId, item, run);
     if (typed.outcome === "sent") {
-      rememberPendingAnswer({ id: item.id, paneId: verdict.main.paneId, channel: item.channel, messageId: item.messageId, text: item.text }, now);
+      if (item.channel !== BOARD) {
+        rememberPendingAnswer({ id: item.id, paneId: verdict.main.paneId, channel: item.channel, messageId: item.messageId, text: item.text }, now);
+      }
       log(logLine("delivered", item, verdict.main.status || verdict.state));
-      await channel.reply(deliveredNotice(verdict.state, item, now));
-      return { ok: true, delivered: true, paneId: verdict.main.paneId, state: verdict.state };
+      return {
+        outcome: { ok: true, delivered: true, paneId: verdict.main.paneId, state: verdict.state },
+        chat: deliveredNotice(verdict.state, item, now),
+        board: `${verdict.state === "working" ? "已送进主会话，它做完手上这件就看" : "已送进主会话"}${itemNote(item)}`,
+      };
     }
     if (typed.outcome === "failed") {
       log(logLine("refused", item, `herdr: ${herdrErrorText(typed.result)}`));
-      await channel.reply(`没送进去：${herdrErrorText(typed.result)}`);
-      return { ok: false, failed: true };
+      const text = `没送进去：${herdrErrorText(typed.result)}`;
+      return { outcome: { ok: false, failed: true }, chat: text, board: text };
     }
     verdict.state = "blocked";
   }
-  writeInbox([{ ...item, stashedAt: now, reason: verdict.state, ...(verdict.state === "absent" ? { absentSince: now } : {}) }]);
+  stash(verdict.state, verdict.state === "absent" ? { absentSince: now } : {});
   log(logLine("stashed", item, verdict.state));
-  if (verdict.state !== "absent") {
-    await channel.reply(`${stashNotice(verdict, settings)}${itemNote(item)}`);
-  }
-  return { ok: true, stashed: true, reason: verdict.state };
+  return {
+    outcome: { ok: true, stashed: true, reason: verdict.state },
+    // A missing name is most likely drover registering the session again
+    // right now: a chat hears of it only once that outlasts the grace.
+    chat: verdict.state === "absent" ? "" : `${stashNotice(verdict, settings)}${itemNote(item)}`,
+    board: `${boardStashNotice(verdict, settings)}${itemNote(item)}`,
+  };
 }
 
 // One pass of the poller over the inbox: the first message goes in as soon as
 // the main session can take it; one that waited for a name past the grace is
 // turned away; one waiting longer than LATE_NOTICE_MS is mentioned once. One
 // message per pass: after it the main session is busy with it, which Claude
-// Code queues behind and Codex waits out.
+// Code queues behind and Codex waits out. While the switch is off, the first
+// message is the first one from the board. The chat hears of its messages
+// once the lock is released; the board's outcome is in the log line alone.
 export async function drainInbox({
   channelFor,
   settings = roleSettings(),
@@ -482,42 +616,54 @@ export async function drainInbox({
   enabled = modeEnabled(),
   log = console.log,
 } = {}) {
-  const items = readInbox();
-  if (!items.length) {
-    return { idle: true };
-  }
-  const say = async (item, text) => {
+  const notices = [];
+  const result = await withInboxLock(() => drainFirst({ settings, run, now, enabled, log, say: (item, text) => notices.push([item, text]) }));
+  for (const [item, text] of notices) {
+    if (item.channel === BOARD) {
+      continue;
+    }
     const channel = channelFor?.(item.channel);
     if (!channel) {
       log(`main inbox · ${item.channel} is not paired any more, notice dropped`);
-      return;
+      continue;
     }
     try {
       await channel.reply(text);
     } catch (error) {
       log(`main inbox · notice failed · ${item.channel}: ${error?.message || error}`);
     }
-  };
+  }
+  return result;
+}
+
+function drainFirst({ settings, run, now, enabled, log, say }) {
+  const items = readInbox();
+  if (!items.length) {
+    return { idle: true };
+  }
   if (!rolesActive(settings)) {
     writeInbox([]);
     for (const item of items) {
       log(logLine("refused", item, "MAIN_AGENT_NAME is no longer set"));
-      await say(item, `直达主会话已经关掉了，这条没送：「${short(item.text)}」`);
+      say(item, `直达主会话已经关掉了，这条没送：「${short(item.text)}」`);
     }
     return { dropped: items.length };
   }
-  if (!enabled) {
+  const first = items.find((item) => mayGoNow(item, enabled));
+  if (!first) {
     return { held: "off" };
   }
-  const [first, ...rest] = items;
+  const rest = items.filter((item) => item !== first);
   const verdict = mainState({ settings, run });
   if (verdict.state === "ready" || verdict.state === "working") {
     const typed = typeIntoMain(verdict.main.paneId, first, run);
     if (typed.outcome === "sent") {
       writeInbox(rest);
-      rememberPendingAnswer({ id: first.id, paneId: verdict.main.paneId, channel: first.channel, messageId: first.messageId, text: first.text }, now);
+      if (first.channel !== BOARD) {
+        rememberPendingAnswer({ id: first.id, paneId: verdict.main.paneId, channel: first.channel, messageId: first.messageId, text: first.text }, now);
+      }
       log(logLine("delivered", first, `${verdict.main.status || verdict.state}, after waiting`));
-      await say(first, deliveredNotice(verdict.state, first, now));
+      say(first, deliveredNotice(verdict.state, first, now));
       return { delivered: first.id };
     }
     if (typed.outcome === "failed") {
@@ -532,14 +678,14 @@ export async function drainInbox({
   if (absentSince !== undefined && now - absentSince >= ABSENT_GRACE_MS) {
     writeInbox(rest);
     log(logLine("refused", first, `no agent named ${settings.mainAgentName}`));
-    await say(first, notFoundText(settings));
+    say(first, notFoundText(settings));
     return { refused: first.id };
   }
-  const late = items.filter((item) => !item.lateNoticeAt && now - Number(item.at) >= LATE_NOTICE_MS);
+  const late = items.filter((item) => mayGoNow(item, enabled) && !item.lateNoticeAt && now - Number(item.at) >= LATE_NOTICE_MS);
   writeInbox(
-    items.map((item, index) => {
+    items.map((item) => {
       const next = { ...item };
-      if (index === 0) {
+      if (item === first) {
         next.reason = verdict.state;
         next.absentSince = absentSince;
       }
@@ -550,9 +696,31 @@ export async function drainInbox({
     }),
   );
   for (const item of late) {
-    await say(item, `还没送进去：「${short(item.text)}」（${waitingReason(verdict, settings)}），仍在暂存`);
+    say(item, `还没送进去：「${short(item.text)}」（${waitingReason(verdict, settings)}），仍在暂存`);
   }
   return { waiting: verdict.state };
+}
+
+// What send-main.mjs prints for drover's task board (the contract with drover,
+// see CLAUDE.md): the text goes into the main session as `[看板] <text>`, now
+// or through the inbox, whether or not the chat's switch is on.
+//   { ok: true, result: "delivered", reason: "ready"|"working", notice }
+//   { ok: true, result: "queued", reason: "queued"|"blocked"|"draft"|"codex-busy"|"absent", notice }
+//   { ok: false, error }
+export async function sendFromBoard(text, { settings = roleSettings(), run = runHerdr, now = Date.now(), enabled = modeEnabled(), log = console.log } = {}) {
+  if (!rolesActive(settings)) {
+    return { ok: false, error: "MAIN_AGENT_NAME 没设（不是 drover 环境），没有主会话可送" };
+  }
+  const outcome = await routeToMain(textParts(text), { channel: { name: BOARD }, settings, run, now, log, enabled });
+  if (outcome.skipped) {
+    return { ok: false, error: "--text 是空的，没送" };
+  }
+  if (!outcome.ok) {
+    return { ok: false, error: outcome.notice };
+  }
+  return outcome.delivered
+    ? { ok: true, result: "delivered", reason: outcome.state, notice: outcome.notice }
+    : { ok: true, result: "queued", reason: outcome.reason, notice: outcome.notice };
 }
 
 // /send: empties the prompt box, then lets the inbox go. The draft is gone

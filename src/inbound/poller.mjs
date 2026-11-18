@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pluginRoot, startupEnv, stateDir } from "../lib/index.mjs";
 
@@ -110,6 +110,21 @@ function openPollerLog() {
   } catch (error) {
     console.error(`poller log unavailable: ${error.message}`);
     return undefined;
+  }
+}
+
+// A line in poller.log from a process that is not the poller (send-main.mjs),
+// stamped the way withTimestamps stamps the poller's own, so every delivery
+// into the main session is in the one log. Its stdout belongs to its caller.
+export function appendPollerLog(...args) {
+  const log = openPollerLog();
+  if (log === undefined) {
+    return;
+  }
+  try {
+    writeSync(log, `${[new Date().toISOString(), ...args].join(" ")}\n`);
+  } finally {
+    closeSync(log);
   }
 }
 

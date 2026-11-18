@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +17,8 @@ import {
   removePendingAnswer,
   routeToMain,
   sanitizeForAgent,
+  sendFromBoard,
+  withInboxLock,
 } from "../src/inbound/main-inbox.mjs";
 import { handleFeishuEvent } from "../src/inbound/feishu.mjs";
 import { handleTelegramUpdate, rememberOutbound } from "../src/inbound/reply.mjs";
@@ -510,5 +513,231 @@ test(
     assert.equal(waiting.channel, "telegram");
     assert.equal(waiting.messageId, "56");
     assert.equal(waiting.text, "[Telegram] 进度怎么样");
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// drover's task board: what the user clicked goes in through send-main.mjs
+// (sendFromBoard), the same delivery as a chat message, but it is not a chat.
+
+function board(text, herdr, extra = {}) {
+  return sendFromBoard(text, { settings: DROVER, run: herdr.run, now: 1000, enabled: true, log: () => {}, ...extra });
+}
+
+// Records which chats a drain asked for, and has none: the board's messages
+// must never ask.
+function noChats() {
+  const asked = [];
+  return {
+    asked,
+    channelFor: (name) => {
+      asked.push(name);
+      return undefined;
+    },
+  };
+}
+
+test(
+  "a click goes straight into an idle or busy Claude Code main session, prefixed [看板], with no answer to wait for",
+  withState(async (dir) => {
+    const idle = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
+    assert.deepEqual(await board("全部收尾：a、b", idle), { ok: true, result: "delivered", reason: "ready", notice: "已送进主会话" });
+    assert.deepEqual(idle.prompts(), [[MAIN, "[看板] 全部收尾：a、b"]]);
+
+    const working = mainHerdr({ main: { agent: "claude", agent_status: "working" } });
+    assert.deepEqual(await board("收尾：a", working), {
+      ok: true,
+      result: "delivered",
+      reason: "working",
+      notice: "已送进主会话，它做完手上这件就看",
+    });
+    assert.deepEqual(working.prompts(), [[MAIN, "[看板] 收尾：a"]]);
+
+    assert.equal(existsSync(join(dir, "main-pending.json")), false);
+    assert.deepEqual(readInbox(), []);
+    assert.equal(existsSync(join(dir, "main-inbox.lock")), false);
+  }),
+);
+
+test(
+  "a dialog, a draft or a busy Codex keeps the click in the inbox, and nothing is typed",
+  withState(async (dir) => {
+    const cases = [
+      [{ main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG }, "blocked", "主会话在等确认，已排队，确认完自动送"],
+      // Herdr can say idle with a menu still drawn.
+      [{ main: { agent: "claude", agent_status: "idle" }, screen: DIALOG }, "blocked", "主会话在等确认，已排队，确认完自动送"],
+      [{ main: { agent: "claude", agent_status: "idle" }, ansi: CLAUDE_DRAFT }, "draft", "主会话输入框里有没发出的内容，已排队，发出或清空后自动送"],
+      [{ main: { agent: "codex", agent_status: "working" }, ansi: CODEX_EMPTY }, "codex-busy", "主会话正在处理上一件事，已排队，它停下就送"],
+    ];
+    for (const [state, reason, notice] of cases) {
+      const herdr = mainHerdr(state);
+      assert.deepEqual(await board("全部收尾：a", herdr), { ok: true, result: "queued", reason, notice });
+      assert.deepEqual(herdr.prompts(), [], reason);
+      assert.ok(!herdr.calls.some((args) => args[1] === "send-keys"), reason);
+      const [kept] = readInbox();
+      assert.equal(kept.text, "[看板] 全部收尾：a");
+      assert.equal(kept.channel, "board");
+      assert.equal(kept.reason, reason);
+      rmSync(join(dir, "main-inbox.json"));
+    }
+  }),
+);
+
+test(
+  "a click while the main session has no name waits for it, and after the grace is dropped without a word to any chat",
+  withState(async () => {
+    const state = { main: undefined };
+    const herdr = mainHerdr(state);
+    assert.deepEqual(await board("全部收尾：a", herdr), {
+      ok: true,
+      result: "queued",
+      reason: "absent",
+      notice: "没找到主会话（herdr 里名为 drover 的 agent），已排队，30 秒内没出现就不送了",
+    });
+    const chats = noChats();
+    const drain = (now) => drainInbox({ channelFor: chats.channelFor, settings: DROVER, run: herdr.run, now, enabled: true, log: () => {} });
+    assert.deepEqual(await drain(1000 + ABSENT_GRACE_MS - 5000), { waiting: "absent" });
+    assert.ok((await drain(1000 + ABSENT_GRACE_MS)).refused);
+    assert.deepEqual(readInbox(), []);
+    assert.deepEqual(herdr.prompts(), []);
+    assert.deepEqual(chats.asked, []);
+
+    // Back within the grace, it goes in.
+    await board("收尾：a", herdr, { now: 100_000 });
+    state.main = { agent: "claude", agent_status: "idle" };
+    assert.ok((await drain(105_000)).delivered);
+    assert.deepEqual(herdr.prompts(), [[MAIN, "[看板] 收尾：a"]]);
+  }),
+);
+
+test(
+  "a queued click goes in when the main session is free, logged without its text, and no chat hears of it",
+  withState(async (dir) => {
+    const state = { main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG };
+    const herdr = mainHerdr(state);
+    const lines = [];
+    assert.equal((await board("全部收尾：a", herdr, { log: (line) => lines.push(line) })).reason, "blocked");
+    const chats = noChats();
+    const drain = (now) => drainInbox({ channelFor: chats.channelFor, settings: DROVER, run: herdr.run, now, enabled: true, log: (line) => lines.push(line) });
+    assert.deepEqual(await drain(6000), { waiting: "blocked" });
+
+    state.main.agent_status = "idle";
+    state.screen = IDLE_SCREEN;
+    assert.ok((await drain(61_000)).delivered);
+    assert.deepEqual(herdr.prompts(), [[MAIN, "[看板] 全部收尾：a"]]);
+    assert.deepEqual(readInbox(), []);
+    assert.deepEqual(chats.asked, []);
+    assert.equal(existsSync(join(dir, "main-pending.json")), false);
+    assert.deepEqual(lines, ["main inbox · stashed · 6 chars · blocked · board", "main inbox · delivered · 6 chars · idle, after waiting · board"]);
+  }),
+);
+
+test(
+  "the chat's off switch does not hold the board: a click goes in, past the chat messages the switch holds",
+  withState(async () => {
+    const state = { main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG };
+    const herdr = mainHerdr(state);
+    const chat = recorder();
+    await toMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    const drain = (now, enabled) => drainInbox({ channelFor: () => chat.channel, settings: DROVER, run: herdr.run, now, enabled, log: () => {} });
+
+    // Switched off, dialog answered: the chat message stays held, the click goes in.
+    state.main.agent_status = "idle";
+    state.screen = IDLE_SCREEN;
+    assert.deepEqual(await drain(6000, false), { held: "off" });
+    assert.deepEqual(await board("收尾：a", herdr, { enabled: false, now: 7000 }), { ok: true, result: "delivered", reason: "ready", notice: "已送进主会话" });
+
+    // A click that has to wait is not behind the held message either.
+    state.main.agent_status = "blocked";
+    state.screen = DIALOG;
+    assert.equal((await board("全部收尾：a、b", herdr, { enabled: false, now: 8000 })).reason, "blocked");
+    state.main.agent_status = "idle";
+    state.screen = IDLE_SCREEN;
+    assert.ok((await drain(12_000, false)).delivered);
+    assert.deepEqual(readInbox().map((item) => item.text), ["[飞书] 先别推"]);
+    assert.deepEqual(await drain(17_000, false), { held: "off" });
+
+    // Switched on again, the chat message goes in.
+    assert.ok((await drain(22_000, true)).delivered);
+    assert.deepEqual(herdr.prompts().map(([, text]) => text), ["[看板] 收尾：a", "[看板] 全部收尾：a、b", "[飞书] 先别推"]);
+    assert.deepEqual(chat.said, ["主会话在等确认：Do you want to proceed?。先回那条确认通知；你这条已暂存，确认完自动送", "已送达主会话"]);
+  }),
+);
+
+test(
+  "with the switch on, clicks and chat messages wait in one line, in the order they came",
+  withState(async () => {
+    const state = { main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG };
+    const herdr = mainHerdr(state);
+    const chat = recorder();
+    await toMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    assert.deepEqual(await board("全部收尾：a", herdr, { now: 2000 }), {
+      ok: true,
+      result: "queued",
+      reason: "queued",
+      notice: "前面还有 1 条在排队，已排在后面，按顺序送",
+    });
+    await toMain("还有这个", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 3000, log: () => {} });
+    assert.equal(chat.said.at(-1), "你这条已暂存，排在前面 2 条后面，主会话能接收时按顺序送");
+
+    state.main.agent_status = "idle";
+    state.screen = IDLE_SCREEN;
+    for (const now of [6000, 11_000, 16_000]) {
+      assert.ok((await drainInbox({ channelFor: () => chat.channel, settings: DROVER, run: herdr.run, now, enabled: true, log: () => {} })).delivered);
+    }
+    assert.deepEqual(herdr.prompts().map(([, text]) => text), ["[飞书] 先别推", "[看板] 全部收尾：a", "[飞书] 还有这个"]);
+    // The chat heard of its own two messages only, and waits for their answers only.
+    assert.deepEqual(chat.said.slice(2), ["已送达主会话", "已送达主会话"]);
+    assert.deepEqual(pendingAnswers(MAIN, 20_000).map((item) => item.text), ["[飞书] 先别推", "[飞书] 还有这个"]);
+  }),
+);
+
+test(
+  "without MAIN_AGENT_NAME the board has nowhere to send: it says so and asks Herdr nothing",
+  withState(async () => {
+    const herdr = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
+    const none = roleSettings({});
+    assert.deepEqual(await board("全部收尾：a", herdr, { settings: none }), { ok: false, error: "MAIN_AGENT_NAME 没设（不是 drover 环境），没有主会话可送" });
+    assert.deepEqual(herdr.calls, []);
+    assert.deepEqual(readInbox(), []);
+
+    // A click queued before MAIN_AGENT_NAME was emptied is dropped, and no chat hears of it.
+    const blocked = mainHerdr({ main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG });
+    await board("全部收尾：a", blocked);
+    const chats = noChats();
+    assert.deepEqual(await drainInbox({ channelFor: chats.channelFor, settings: none, run: blocked.run, now: 6000, enabled: true, log: () => {} }), { dropped: 1 });
+    assert.deepEqual(readInbox(), []);
+    assert.deepEqual(chats.asked, []);
+  }),
+);
+
+test(
+  "an empty click and a failed send are errors, not outcomes",
+  withState(async () => {
+    const herdr = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
+    assert.deepEqual(await board(" \n ", herdr), { ok: false, error: "--text 是空的，没送" });
+    const failing = (args) => (args[0] === "agent" && args[1] === "prompt" ? { status: 1, stdout: "", stderr: "pane is gone" } : herdr.run(args));
+    assert.deepEqual(await board("收尾：a", herdr, { run: failing }), { ok: false, error: "没送进去：pane is gone" });
+    assert.deepEqual(readInbox(), []);
+  }),
+);
+
+test(
+  "the inbox lock: a delivery waits for the other process's, and a lock whose holder is gone is taken over",
+  withState(async (dir) => {
+    const lock = join(dir, "main-inbox.lock");
+    // Held by a live process (this one): no turn within the time allowed.
+    writeFileSync(lock, `${process.pid}\n`);
+    await assert.rejects(withInboxLock(async () => "ran", { timeoutMs: 0, wait: async () => {} }), /主会话的投递正忙/);
+    assert.ok(existsSync(lock));
+    // Released while waiting: the turn comes.
+    assert.equal(await withInboxLock(async () => "ran", { wait: async () => rmSync(lock) }), "ran");
+    assert.equal(existsSync(lock), false);
+
+    // Left behind by a process that is gone.
+    writeFileSync(lock, `${spawnSync(process.execPath, ["-e", ""]).pid}\n`);
+    const herdr = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
+    assert.equal((await board("收尾：a", herdr)).result, "delivered");
+    assert.equal(existsSync(lock), false);
   }),
 );

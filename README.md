@@ -195,6 +195,8 @@ drover reads Oncall's state with the `status` action's script, which prints one 
 /bin/bash <plugin_root>/bin/run-node.sh src/actions/status.mjs
 ```
 
+drover's task board sends what you click there (`全部收尾：…`) to the main session with `src/actions/send-main.mjs --source board --text "<text>"`: it goes in as `[看板] <text>` by the same rules as a chat message (it waits for a dialog, a draft or a busy Codex), prints one line of JSON for the board, gets no reply on Feishu, and is not held by `/off`.
+
 ## Config
 
 | key | default | meaning |
