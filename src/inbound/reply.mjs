@@ -3,6 +3,9 @@ import { dirname, join } from "node:path";
 import {
   blockedSnippet,
   callState,
+  chatPartsDeliverable,
+  chatPartsPrompt,
+  chatPartsText,
   composeMessage,
   consumePairCode,
   currentPaneStatus,
@@ -10,6 +13,7 @@ import {
   dialogFingerprint,
   envFlag,
   extractStartPayload,
+  fetchedImages,
   mainBlockedText,
   modeEnabled,
   nextDialog,
@@ -29,6 +33,8 @@ import {
   stateDir,
   statusTitle,
   telegramAnswerCallback,
+  textParts,
+  undeliveredNote,
   upsertEnvValue,
 } from "../lib/index.mjs";
 import { describeError } from "./poller.mjs";
@@ -344,6 +350,18 @@ function deliveryStatus(paneId, live, fallbackStatus, deps) {
   return live || fallbackStatus || "unknown";
 }
 
+// A dialog takes keys or a typed answer; an image is neither, and typing its
+// path into a dialog would submit the path as the answer. So a message that
+// carries an image never goes into a dialog, by any of the three ways below
+// that type into one, and nothing of it is typed: the words of such a message
+// are written around the image, not as an answer on their own.
+function imageIntoDialog() {
+  return { status: 1, refused: "image", stderr: "a dialog takes words or a button, not an image" };
+}
+
+// `options.prompt` is what `agent prompt` sends when it is not `text` (a chat
+// message with its images as path lines); `options.images` counts the images
+// it carries, which keeps it out of any dialog.
 export function deliverReply(paneId, text, fallbackStatus, options = {}) {
   const run = options.run ?? runHerdr;
   const live = currentPaneStatus(paneId, run);
@@ -352,6 +370,9 @@ export function deliverReply(paneId, text, fallbackStatus, options = {}) {
     return stale;
   }
   const plan = classifyDelivery(deliveryStatus(paneId, live, fallbackStatus, options), text);
+  if (plan.mode !== "prompt" && options.images) {
+    return imageIntoDialog();
+  }
   if (plan.mode === "keys") {
     return run(["pane", "send-keys", paneId, ...plan.keys]);
   }
@@ -362,7 +383,7 @@ export function deliverReply(paneId, text, fallbackStatus, options = {}) {
     }
     return run(["pane", "send-keys", paneId, "enter"]);
   }
-  const prompted = run(["agent", "prompt", paneId, text]);
+  const prompted = run(["agent", "prompt", paneId, options.prompt ?? text]);
   if (isAgentBlockedError(prompted)) {
     // Herdr just contradicted `pane get`: the pane is blocked after all, so the
     // status we checked against was stale. Verify the dialog before typing,
@@ -370,6 +391,9 @@ export function deliverReply(paneId, text, fallbackStatus, options = {}) {
     const stale = staleDialog(paneId, fallbackStatus, options.fingerprint, options);
     if (stale) {
       return stale;
+    }
+    if (options.images) {
+      return imageIntoDialog();
     }
     const typed = run(["pane", "send-text", paneId, text]);
     if (herdrFailed(typed)) {
@@ -428,7 +452,7 @@ export async function handleTelegramUpdate(update, deps = {}) {
   // With drover: commands, the off switch, and a line to the main session.
   const settings = deps.settings ?? roleSettings();
   if (rolesActive(settings)) {
-    return routeChatMessage(text, {
+    return routeChatMessage(textParts(text), {
       channel,
       quotedId: message.reply_to_message?.message_id,
       messageId: message.message_id,
@@ -453,7 +477,7 @@ export async function handleTelegramUpdate(update, deps = {}) {
     await channel.reply(NO_TARGET);
     return { skipped: "no-target" };
   }
-  return finishDelivery(target, text, { ...deps, channel });
+  return finishDelivery(target, textParts(text), { ...deps, channel });
 }
 
 async function maybePair(message, text, token, send = sendTelegram) {
@@ -509,15 +533,31 @@ async function handleCallback(query, deps) {
     await channel.reply("no pane mapped for that button");
     return { skipped: "no-target" };
   }
-  return finishDelivery(target, text, { ...deps, channel });
+  return finishDelivery(target, textParts(text), { ...deps, channel });
 }
 
-// Delivers a reply into its pane and acks it. `deps.channel` is where the ack
-// and any follow-on question go; `deps.ack` overrides only the ack, for a
-// channel that reports on the message tapped rather than with a new one.
-export async function finishDelivery(target, text, deps) {
+// The message's images fetched (`fetchImages`, when it has any to fetch), and
+// the parts back when there is anything to type in. When there is not (an
+// image that could not be fetched and no words, a post that was only a video),
+// the user is told what did not make it, and undefined comes back.
+export async function readyChatParts(parts, { fetchImages, channel }) {
+  const ready = fetchImages && parts.some((part) => part.type === "image") ? await fetchImages(parts) : parts;
+  if (chatPartsDeliverable(ready)) {
+    return ready;
+  }
+  await channel.reply(`没送进去：${undeliveredNote(ready) || "消息里没有能送的内容"}`);
+  return undefined;
+}
+
+// Delivers a chat message (its parts, see lib/chat-images.mjs) into its pane
+// and acks it. `deps.channel` is where the ack and any follow-on question go;
+// `deps.ack` overrides only the ack, for a channel that reports on the message
+// tapped rather than with a new one.
+export async function finishDelivery(target, parts, deps) {
   const { channel } = deps;
   const ack = deps.ack ?? channel.reply;
+  const text = chatPartsText(parts);
+  const where = target.where || target.paneId;
   // Which question this reply is about to answer, read before it lands, so the
   // one that replaces it can be told apart from it afterwards.
   const answered = target.status === "blocked" ? liveDialog(target.paneId, deps) : undefined;
@@ -527,18 +567,27 @@ export async function finishDelivery(target, text, deps) {
     run: deps.run,
     callState: deps.callState,
     screenCall: deps.screenCall,
+    prompt: chatPartsPrompt(parts),
+    images: fetchedImages(parts),
   });
   if (result?.stale) {
     return answerStale(target, result, { ...deps, ack });
+  }
+  if (result?.refused) {
+    // The card was not used up: it can still be tapped, or quoted with words.
+    console.log(`refused · ${where} · a dialog is up and the message carries an image`);
+    await ack(`确认框只能用文字或按钮回答，这条带图片，没送 · ${where}`);
+    return { ok: false, refused: result.refused, paneId: target.paneId };
   }
   const ok = !herdrFailed(result);
   if (ok && target.explicit && target.messageId && target.status === "blocked") {
     markOutbound(target.messageId, { spent: "sent" });
   }
+  const missing = undeliveredNote(parts);
   await ack(
     ok
-      ? `sent · ${target.where || target.paneId}`
-      : `failed · ${target.where || target.paneId}\n${herdrErrorText(result)}`,
+      ? `sent · ${where}${missing ? `\n${missing}` : ""}`
+      : `failed · ${where}\n${herdrErrorText(result)}`,
   );
   const outcome = { ok, paneId: target.paneId, mode: classifyDelivery(target.status, text).mode };
   if (ok && answered && (await followForm(target, answered, deps))) {

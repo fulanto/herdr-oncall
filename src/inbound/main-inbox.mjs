@@ -1,8 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  attachmentLine,
   bareToMain,
   channelPaired,
+  chatPartsText,
   dialogQuestion,
   lookupAgentByName,
   mainDonePlan,
@@ -19,6 +21,7 @@ import {
   setMode,
   sleep,
   stateDir,
+  undeliveredNote,
 } from "../lib/index.mjs";
 import {
   NO_TARGET,
@@ -28,6 +31,7 @@ import {
   isAgentBlockedError,
   lastOutbound,
   lookupOutbound,
+  readyChatParts,
   rememberOutbound,
 } from "./reply.mjs";
 
@@ -86,8 +90,36 @@ export function sanitizeForAgent(raw, limit = MAX_CHARS) {
   return { text: truncated ? chars.slice(0, limit).join("").trimEnd() : text, chars: chars.length, truncated };
 }
 
+// A chat message as the main session's prompt: its words cleaned and within
+// `limit` characters, each image on a line of its own where it was. Only the
+// words count toward the limit and only words are cut: an image line past the
+// cut still goes in, in its place after the words that did. `chars` counts the
+// words alone.
+export function composeForAgent(parts, limit = MAX_CHARS) {
+  const lines = [];
+  let left = limit;
+  let chars = 0;
+  let truncated = false;
+  for (const part of parts) {
+    if (part.type !== "text") {
+      lines.push(attachmentLine(part));
+      continue;
+    }
+    const clean = sanitizeForAgent(part.text, left);
+    chars += clean.chars;
+    truncated ||= clean.truncated;
+    left -= Array.from(clean.text).length;
+    if (clean.text) {
+      lines.push(clean.text);
+    }
+  }
+  return { text: lines.join("\n"), chars, truncated };
+}
+
 function short(text, limit = 40) {
-  const chars = Array.from(String(text ?? "").replace(/\s+/g, " ").trim());
+  // An image's path says nothing in a one-line reminder.
+  const shown = String(text ?? "").replace(/\[图片\] [^\n]*/g, "[图片]");
+  const chars = Array.from(shown.replace(/\s+/g, " ").trim());
   return chars.length > limit ? `${chars.slice(0, limit).join("")}…` : chars.join("");
 }
 
@@ -351,8 +383,17 @@ function logLine(outcome, item, detail) {
   return `main inbox · ${outcome} · ${item.chars} chars · ${detail} · ${item.channel}`;
 }
 
-function truncatedNote(item) {
-  return item.truncated ? `（超过 ${MAX_CHARS} 字，只送了前 ${MAX_CHARS} 字）` : "";
+// What of the message did not go in: words past the limit, images that could
+// not be fetched, a video. "" when all of it did.
+function itemNote(item) {
+  const notes = [];
+  if (item.truncated) {
+    notes.push(`超过 ${MAX_CHARS} 字，只送了前 ${MAX_CHARS} 字`);
+  }
+  if (item.missing) {
+    notes.push(item.missing);
+  }
+  return notes.length ? `（${notes.join("；")}）` : "";
 }
 
 function deliveredNotice(state, item, now) {
@@ -363,7 +404,7 @@ function deliveredNotice(state, item, now) {
       : waited > 0
         ? `已送达主会话（暂存了 ${waited} 分钟）`
         : "已送达主会话";
-  return `${base}${truncatedNote(item)}`;
+  return `${base}${itemNote(item)}`;
 }
 
 // Types one message into the main session. Returns "sent" | "blocked" |
@@ -376,12 +417,13 @@ function typeIntoMain(paneId, item, run) {
   return { outcome: herdrFailed(result) ? "failed" : "sent", result };
 }
 
-// A message for the main session: sent now when it can go in, otherwise kept
-// in the inbox for the poller to send when it can. Always says which on the
-// channel it came from, except while the main session's name is missing, when
-// the poller decides within ABSENT_GRACE_MS. Returns the outcome.
-export async function routeToMain(raw, { channel, messageId, settings = roleSettings(), run = runHerdr, now = Date.now(), log = console.log } = {}) {
-  const clean = sanitizeForAgent(raw);
+// A message for the main session (its parts, see lib/chat-images.mjs, images
+// already fetched): sent now when it can go in, otherwise kept in the inbox
+// for the poller to send when it can. Always says which on the channel it came
+// from, except while the main session's name is missing, when the poller
+// decides within ABSENT_GRACE_MS. Returns the outcome.
+export async function routeToMain(parts, { channel, messageId, settings = roleSettings(), run = runHerdr, now = Date.now(), log = console.log } = {}) {
+  const clean = composeForAgent(parts);
   if (!clean.text) {
     return { skipped: "empty" };
   }
@@ -390,6 +432,7 @@ export async function routeToMain(raw, { channel, messageId, settings = roleSett
     text: `${CHAT_PREFIX[channel.name] ?? CHAT_PREFIX.feishu}${clean.text}`,
     chars: clean.chars,
     truncated: clean.truncated,
+    missing: undeliveredNote(parts) || undefined,
     channel: channel.name,
     messageId: messageId === undefined || messageId === null ? undefined : String(messageId),
     at: now,
@@ -399,7 +442,7 @@ export async function routeToMain(raw, { channel, messageId, settings = roleSett
     // Order is kept: nothing overtakes a message that is already waiting.
     writeInbox([...waiting, { ...item, stashedAt: now, reason: "queued" }]);
     log(logLine("stashed", item, `behind ${waiting.length} waiting`));
-    await channel.reply(`你这条已暂存，排在前面 ${waiting.length} 条后面，主会话能接收时按顺序送`);
+    await channel.reply(`你这条已暂存，排在前面 ${waiting.length} 条后面，主会话能接收时按顺序送${itemNote(item)}`);
     return { ok: true, stashed: true, reason: "queued" };
   }
   const verdict = mainState({ settings, run });
@@ -421,7 +464,7 @@ export async function routeToMain(raw, { channel, messageId, settings = roleSett
   writeInbox([{ ...item, stashedAt: now, reason: verdict.state, ...(verdict.state === "absent" ? { absentSince: now } : {}) }]);
   log(logLine("stashed", item, verdict.state));
   if (verdict.state !== "absent") {
-    await channel.reply(`${stashNotice(verdict, settings)}${truncatedNote(item)}`);
+    await channel.reply(`${stashNotice(verdict, settings)}${itemNote(item)}`);
   }
   return { ok: true, stashed: true, reason: verdict.state };
 }
@@ -592,17 +635,18 @@ export async function chatCommand(text, { channel, settings, run, wait, now, log
   return { skipped: "command", command };
 }
 
-function isCommand(text) {
+export function isChatCommand(text) {
   return text.startsWith("/") || /^(help|start)$/i.test(text);
 }
 
-// One text message from the paired chat, while MAIN_AGENT_NAME is set.
-// `quotedId` is the ping it quotes, if it quotes one. Answers to a dialog (a
-// quoted blocked ping) still go in as keys, through finishDelivery; anything
-// that would be typed into the main session as a prompt goes through
-// routeToMain, prefix and all.
+// One message from the paired chat (its parts, see lib/chat-images.mjs),
+// while MAIN_AGENT_NAME is set. `quotedId` is the ping it quotes, if it quotes
+// one; `fetchImages` fetches its images, which happens only once it is known
+// to go somewhere. Answers to a dialog (a quoted blocked ping) still go in as
+// keys, through finishDelivery; anything that would be typed into the main
+// session as a prompt goes through routeToMain, prefix and all.
 export async function routeChatMessage(
-  text,
+  parts,
   {
     channel,
     quotedId,
@@ -615,16 +659,22 @@ export async function routeChatMessage(
     setEnabled,
     log = console.log,
     channelFor,
+    fetchImages,
     deps = {},
   },
 ) {
-  if (isCommand(text)) {
+  const text = chatPartsText(parts);
+  if (isChatCommand(text)) {
     return chatCommand(text, { channel, settings, run, wait, now, log, setEnabled, channelFor });
   }
   if (!enabled) {
     log(`chat · refused · oncall is off · ${channel.name}`);
     await channel.reply(OFF_NOTICE);
     return { skipped: "off" };
+  }
+  const ready = await readyChatParts(parts, { fetchImages, channel });
+  if (!ready) {
+    return { skipped: "nothing-to-send" };
   }
   let mainPane;
   const isMain = (paneId) => {
@@ -634,12 +684,12 @@ export async function routeChatMessage(
   const hit = lookupOutbound(quotedId, now);
   if (hit) {
     if (hit.status !== "blocked" && isMain(hit.paneId)) {
-      return routeToMain(text, { channel, messageId, settings, run, now, log });
+      return routeToMain(ready, { channel, messageId, settings, run, now, log });
     }
-    return finishDelivery({ ...hit, explicit: true }, text, { ...deps, run, wait, channel });
+    return finishDelivery({ ...hit, explicit: true }, ready, { ...deps, run, wait, channel });
   }
   if (bareToMain(settings)) {
-    return routeToMain(text, { channel, messageId, settings, run, now, log });
+    return routeToMain(ready, { channel, messageId, settings, run, now, log });
   }
   const latest = lastOutbound(now);
   if (!latest?.paneId) {
@@ -647,9 +697,9 @@ export async function routeChatMessage(
     return { skipped: "no-target" };
   }
   if (latest.status !== "blocked" && isMain(latest.paneId)) {
-    return routeToMain(text, { channel, messageId, settings, run, now, log });
+    return routeToMain(ready, { channel, messageId, settings, run, now, log });
   }
-  return finishDelivery({ ...latest, explicit: false }, text, { ...deps, run, wait, channel });
+  return finishDelivery({ ...latest, explicit: false }, ready, { ...deps, run, wait, channel });
 }
 
 // ---------------------------------------------------------------------------

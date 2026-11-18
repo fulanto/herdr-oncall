@@ -16,7 +16,7 @@ import {
   mergeFragments,
   remoteChannels,
 } from "../src/lib/index.mjs";
-import { feishuMessageText, handleFeishuEvent } from "../src/inbound/feishu.mjs";
+import { handleFeishuEvent, parseFeishuMessage } from "../src/inbound/feishu.mjs";
 import { rememberOutbound } from "../src/inbound/reply.mjs";
 
 const encoder = new TextEncoder();
@@ -182,11 +182,11 @@ test("CHANNEL picks among paired channels, telegram when unset", () => {
   assert.deepEqual(remoteChannels({ ...feishu, FEISHU_OPEN_ID: "", CHANNEL: "feishu" }), []);
 });
 
-test("a message's text loses its mention placeholders", () => {
-  const text = (content) => feishuMessageText({ message_type: "text", content: JSON.stringify(content) });
-  assert.equal(text({ text: "@_user_1 yes please" }), "yes please");
-  assert.equal(feishuMessageText({ message_type: "image", content: "{}" }), "");
-  assert.equal(feishuMessageText({ message_type: "text", content: "not json" }), "");
+test("a text message loses its mention placeholders, an image message is one image", () => {
+  const parse = (type, content) => parseFeishuMessage({ message_type: type, content: JSON.stringify(content) }).parts;
+  assert.deepEqual(parse("text", { text: "@_user_1 yes please" }), [{ type: "text", text: "yes please" }]);
+  assert.deepEqual(parse("image", { image_key: "img_1" }), [{ type: "image", n: 1, key: "img_1" }]);
+  assert.deepEqual(parseFeishuMessage({ message_type: "text", content: "not json" }).parts, []);
 });
 
 const DIALOG = [

@@ -713,3 +713,61 @@ test("a lost follow-on ping does not undo the answer that went through", async (
     assert.equal(sent.length, 1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A message with an image never goes into a dialog.
+
+const IMAGE_PROMPT = "看下这个\n[图片] /tmp/oncall-images/feishu-om_1-1.png";
+
+function typedSomething(calls) {
+  return calls.some((call) => call.includes("send-keys") || call.includes("send-text") || call.includes("agent prompt"));
+}
+
+test("a message with an image is refused by a dialog, whether it reads as keys or as an answer", () => {
+  for (const text of ["1", "看下这个"]) {
+    const calls = [];
+    const result = deliverReply("w8:p1", text, "blocked", {
+      fingerprint: dialogFingerprint(DIALOG),
+      run: fakeHerdr(DIALOG, calls),
+      prompt: IMAGE_PROMPT,
+      images: 1,
+    });
+    assert.equal(result.refused, "image");
+    assert.equal(herdrFailed(result), true);
+    assert.equal(typedSomething(calls), false, `nothing typed for ${text}`);
+  }
+  // A menu Herdr calls idle is a dialog all the same.
+  const calls = [];
+  assert.equal(deliverReply("w8:p1", "", "done", { run: idleHerdr(FORM, calls), prompt: IMAGE_PROMPT, images: 1 }).refused, "image");
+  assert.equal(typedSomething(calls), false);
+});
+
+test("herdr turning a prompt with an image away as agent_blocked types nothing", () => {
+  const calls = [];
+  const result = deliverReply("w8:p1", "看下这个", "done", {
+    prompt: IMAGE_PROMPT,
+    images: 1,
+    run: (args) => {
+      calls.push(args.join(" "));
+      if (args[0] === "pane" && args[1] === "get") {
+        return { status: 0, stdout: JSON.stringify({ result: { agent_status: "idle" } }) };
+      }
+      if (args[1] === "read") {
+        return { status: 0, stdout: JSON.stringify({ result: { read: { text: "⏺ done.\n\n❯ " } } }) };
+      }
+      if (args[0] === "agent" && args[1] === "prompt") {
+        return { status: 1, stdout: "", stderr: '{"error":{"code":"agent_blocked"}}' };
+      }
+      return { status: 0, stdout: "" };
+    },
+  });
+  assert.equal(result.refused, "image");
+  assert.ok(!calls.some((call) => call.includes("send-text") || call.includes("send-keys")));
+});
+
+test("a pane that is not asking anything takes the message with its image lines, as a prompt", () => {
+  const calls = [];
+  const result = deliverReply("w8:p1", "看下这个", "done", { run: idleHerdr("⏺ done.\n\n❯ ", calls), prompt: IMAGE_PROMPT, images: 1 });
+  assert.equal(herdrFailed(result), false);
+  assert.equal(calls.at(-1), `agent prompt w8:p1 ${IMAGE_PROMPT}`);
+});

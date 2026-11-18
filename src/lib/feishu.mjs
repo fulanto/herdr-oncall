@@ -33,8 +33,11 @@ export function feishuOpenId(env = process.env) {
 
 // One door for every Feishu HTTP call, so the timeout and the tolerant body
 // parse are decided in a single place, as `telegramApi` does for Telegram.
+// With `bytes`, a successful answer that is not JSON is a file: it comes back
+// as `bytes` with its `contentType`, at most `maxBytes` of it. An error is
+// still JSON (`{ code, msg }`), so it is parsed as before.
 export async function feishuFetch(url, options = {}) {
-  const { method = "POST", body, form, headers = {}, timeoutMs = 15_000, fetchImpl = fetch } = options;
+  const { method = "POST", body, form, headers = {}, timeoutMs = 15_000, fetchImpl = fetch, bytes = false, maxBytes } = options;
   const init = { method, headers: { ...headers }, signal: AbortSignal.timeout(timeoutMs) };
   if (form) {
     init.headers["content-type"] = "application/x-www-form-urlencoded";
@@ -44,8 +47,54 @@ export async function feishuFetch(url, options = {}) {
     init.body = JSON.stringify(body);
   }
   const response = await fetchImpl(url, init);
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (bytes && response.ok && !/json/i.test(contentType)) {
+    return { ok: true, status: response.status, contentType, bytes: await readBytes(response, maxBytes), text: "" };
+  }
   const text = await response.text().catch(() => "");
   return { ok: response.ok, status: response.status, text, json: parseBody(text) };
+}
+
+function tooLarge(limit) {
+  return Object.assign(new Error(`larger than ${limit} bytes`), { tooLarge: true, limit });
+}
+
+// The body, given up on as soon as it passes `maxBytes`, so a huge file is
+// never held in memory whole.
+async function readBytes(response, maxBytes) {
+  const declared = Number(response.headers?.get?.("content-length"));
+  if (maxBytes && declared > maxBytes) {
+    throw tooLarge(maxBytes);
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const whole = new Uint8Array(await response.arrayBuffer());
+    if (maxBytes && whole.length > maxBytes) {
+      throw tooLarge(maxBytes);
+    }
+    return whole;
+  }
+  const chunks = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    size += value.length;
+    if (maxBytes && size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge(maxBytes);
+    }
+    chunks.push(value);
+  }
+  const whole = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    whole.set(chunk, at);
+    at += chunk.length;
+  }
+  return whole;
 }
 
 function parseBody(text) {
@@ -127,7 +176,10 @@ export async function feishuVerifyCreds(creds, { fetchImpl } = {}) {
   return { ok: false, rejected: DEAD_APP_CODES.has(json?.code), detail };
 }
 
-export async function feishuApi(creds, method, path, body, { fetchImpl } = {}) {
+// Returns the JSON answer, or with `bytes` the file ({ bytes, contentType }).
+// A refusal throws, carrying Feishu's code as `feishuCode` (or the HTTP status
+// as `httpStatus` when there is none) and its message as `detail`.
+export async function feishuApi(creds, method, path, body, { fetchImpl, bytes = false, maxBytes, timeoutMs } = {}) {
   for (let attempt = 0; ; attempt++) {
     const token = await tenantToken(creds, { fetchImpl, fresh: attempt > 0 });
     const result = await feishuFetch(`${feishuHosts(creds.brand).open}/open-apis${path}`, {
@@ -135,17 +187,43 @@ export async function feishuApi(creds, method, path, body, { fetchImpl } = {}) {
       body,
       headers: { authorization: `Bearer ${token}` },
       fetchImpl,
+      bytes,
+      maxBytes,
+      ...(timeoutMs ? { timeoutMs } : {}),
     });
+    if (bytes && result.bytes) {
+      return { bytes: result.bytes, contentType: result.contentType };
+    }
     const code = result.json?.code;
-    if (code === 0) {
+    if (code === 0 && !bytes) {
       return result.json;
     }
     if (attempt === 0 && STALE_TOKEN_CODES.has(code)) {
       continue;
     }
     const detail = result.json?.msg || result.text.slice(0, 200);
-    throw new Error(`feishu ${method} ${path.split("?")[0]} failed: ${code ?? result.status} ${detail}`.trim());
+    throw Object.assign(new Error(`feishu ${method} ${path.split("?")[0]} failed: ${code ?? result.status} ${detail}`.trim()), {
+      ...(code === undefined ? { httpStatus: result.status } : { feishuCode: code }),
+      detail,
+    });
   }
+}
+
+// The largest image taken from a chat. Feishu serves images up to 100 MB
+// (获取消息中的资源文件, https://open.feishu.cn/document/server-docs/im-v1/message/get-2);
+// the poller reads one into memory, so it stops well short of that.
+export const FEISHU_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
+
+// An image in a message the bot received, a plain `image` message's or one
+// inside a rich-text post, both `type=image`. The answer is the file itself.
+export async function downloadFeishuImage(creds, messageId, imageKey, { fetchImpl, maxBytes = FEISHU_IMAGE_MAX_BYTES } = {}) {
+  return feishuApi(
+    creds,
+    "GET",
+    `/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(imageKey)}?type=image`,
+    undefined,
+    { fetchImpl, bytes: true, maxBytes, timeoutMs: 60_000 },
+  );
 }
 
 function plainDiv(content) {

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { dialogFingerprint, roleSettings } from "../src/lib/index.mjs";
+import { dialogFingerprint, roleSettings, textParts } from "../src/lib/index.mjs";
 import {
   ABSENT_GRACE_MS,
   LATE_NOTICE_MS,
@@ -22,6 +22,9 @@ import { handleTelegramUpdate, rememberOutbound } from "../src/inbound/reply.mjs
 
 const DROVER = roleSettings({ MAIN_AGENT_NAME: "drover", BARE_MESSAGE_TARGET: "main" });
 const MAIN = "w1Z:p1";
+
+// A text message for the main session, as the one part it is.
+const toMain = (text, options) => routeToMain(textParts(text), options);
 
 // Screens captured from a live Claude Code 2.1.319 and Codex 0.166.0 with
 // `herdr pane read <pane> --source visible --format ansi` (bottom lines).
@@ -161,7 +164,7 @@ test(
   withState(async () => {
     const herdr = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
     const chat = recorder();
-    const outcome = await routeToMain("进度怎么样", { channel: chat.channel, messageId: "om_user_1", settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    const outcome = await toMain("进度怎么样", { channel: chat.channel, messageId: "om_user_1", settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
     assert.equal(outcome.delivered, true);
     assert.deepEqual(herdr.prompts(), [[MAIN, "[飞书] 进度怎么样"]]);
     assert.deepEqual(chat.said, ["已送达主会话"]);
@@ -183,7 +186,7 @@ test(
   withState(async () => {
     const herdr = mainHerdr({ main: { agent: "claude", agent_status: "done" } });
     const chat = recorder("telegram");
-    await routeToMain(`!${"字".repeat(2100)}`, { channel: chat.channel, messageId: 42, settings: DROVER, run: herdr.run, log: () => {} });
+    await toMain(`!${"字".repeat(2100)}`, { channel: chat.channel, messageId: 42, settings: DROVER, run: herdr.run, log: () => {} });
     const [[, text]] = herdr.prompts();
     assert.ok(text.startsWith("[Telegram] !字"));
     assert.equal(Array.from(text.slice("[Telegram] ".length)).length, 2000);
@@ -196,14 +199,14 @@ test(
   withState(async () => {
     const claude = mainHerdr({ main: { agent: "claude", agent_status: "working" } });
     const chat = recorder();
-    await routeToMain("顺便看下 CI", { channel: chat.channel, settings: DROVER, run: claude.run, log: () => {} });
+    await toMain("顺便看下 CI", { channel: chat.channel, settings: DROVER, run: claude.run, log: () => {} });
     assert.deepEqual(claude.prompts(), [[MAIN, "[飞书] 顺便看下 CI"]]);
     assert.deepEqual(chat.said, ["已送达，主会话正在处理上一件事，会接着看"]);
 
     const state = { main: { agent: "codex", agent_status: "working" }, ansi: CODEX_EMPTY };
     const codex = mainHerdr(state);
     const codexChat = recorder();
-    const stashed = await routeToMain("顺便看下 CI", { channel: codexChat.channel, settings: DROVER, run: codex.run, now: 1000, log: () => {} });
+    const stashed = await toMain("顺便看下 CI", { channel: codexChat.channel, settings: DROVER, run: codex.run, now: 1000, log: () => {} });
     assert.equal(stashed.reason, "codex-busy");
     assert.deepEqual(codex.prompts(), []);
     assert.match(codexChat.said[0], /Codex 收到新消息会打断当前这一轮/);
@@ -223,7 +226,7 @@ test(
     const state = { main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG };
     const herdr = mainHerdr(state);
     const chat = recorder();
-    await routeToMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    await toMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
     assert.deepEqual(chat.said, ["主会话在等确认：Do you want to proceed?。先回那条确认通知；你这条已暂存，确认完自动送"]);
     assert.deepEqual(herdr.prompts(), []);
 
@@ -249,7 +252,7 @@ test(
     const state = { main: { agent: "claude", agent_status: "idle" }, ansi: CLAUDE_MULTILINE, draftLines: 2 };
     const herdr = mainHerdr(state);
     const chat = recorder();
-    await routeToMain("帮我看下日志", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    await toMain("帮我看下日志", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
     assert.match(chat.said[0], /^终端输入框里有没发出的内容「多行草稿第一行 多行草稿第二行」，你这条已暂存。回 \/send 清空草稿后送入/);
     assert.deepEqual(herdr.prompts(), []);
 
@@ -283,7 +286,7 @@ test(
     const state = { main: undefined };
     const herdr = mainHerdr(state);
     const chat = recorder();
-    const outcome = await routeToMain("进度？", { channel: chat.channel, messageId: "om_2", settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    const outcome = await toMain("进度？", { channel: chat.channel, messageId: "om_2", settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
     assert.equal(outcome.reason, "absent");
     // Nothing said yet: drover is most likely registering it again right now.
     assert.deepEqual(chat.said, []);
@@ -302,7 +305,7 @@ test(
   withState(async () => {
     const herdr = mainHerdr({ main: undefined });
     const chat = recorder();
-    await routeToMain("进度？", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    await toMain("进度？", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
     const drain = (now) => drainInbox({ channelFor: () => chat.channel, settings: DROVER, run: herdr.run, now, enabled: true, log: () => {} });
     assert.deepEqual(await drain(1000 + ABSENT_GRACE_MS - 5000), { waiting: "absent" });
     assert.deepEqual(chat.said, []);
@@ -317,8 +320,8 @@ test(
   withState(async () => {
     const herdr = mainHerdr({ main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG });
     const chat = recorder();
-    await routeToMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 0, log: () => {} });
-    await routeToMain("还有这个", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    await toMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 0, log: () => {} });
+    await toMain("还有这个", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
     assert.equal(chat.said[1], "你这条已暂存，排在前面 1 条后面，主会话能接收时按顺序送");
     const drain = (now) => drainInbox({ channelFor: () => chat.channel, settings: DROVER, run: herdr.run, now, enabled: true, log: () => {} });
     await drain(LATE_NOTICE_MS + 1000);
