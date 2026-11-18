@@ -208,12 +208,17 @@ function channelRecorder() {
 
 const quietLog = () => {};
 
+// Every step runs on the test's clock, not the real one: the waiting list
+// gives up on a message after 6 hours and outbound.json forgets a ping after
+// 24, so against Date.now() the messages remembered at T0 had expired a few
+// hours after these tests were written. The done comes after the records were
+// written, so its time is the clock's, read when it runs.
 function done(deps, settings, turnAnswer) {
-  return mainDonePings({ paneId: MAIN, where: "Git-Repo · pane 1", turnAnswer, settings, wait: async () => {}, log: quietLog, ...deps });
+  return mainDonePings({ paneId: MAIN, where: "Git-Repo · pane 1", turnAnswer, settings, now: clock, wait: async () => {}, log: quietLog, ...deps });
 }
 
 function deliver(pings, send) {
-  return sendMainPings(pings, { paneId: MAIN, where: "Git-Repo · pane 1", title: "done · Claude", channels: ["feishu"], send, log: quietLog, error: quietLog });
+  return sendMainPings(pings, { paneId: MAIN, where: "Git-Repo · pane 1", title: "done · Claude", channels: ["feishu"], send, now: clock, log: quietLog, error: quietLog });
 }
 
 test(
@@ -227,10 +232,10 @@ test(
     assert.deepEqual(out.sent, [{ channel: "feishu", text: ANSWER, replyTo: "om_q" }]);
     // Bare: no "done · Claude" title, no location line.
     assert.ok(!out.sent[0].text.includes("done · Claude") && !out.sent[0].text.includes("Git-Repo · pane 1"));
-    assert.deepEqual(pendingAnswers(MAIN), []);
+    assert.deepEqual(pendingAnswers(MAIN, clock), []);
     // A reply to the answer is a prompt for the main session, as before.
-    assert.equal(lookupOutbound("om_out_1").status, "done");
-    assert.equal(lookupOutbound("om_out_1").layout, "main");
+    assert.equal(lookupOutbound("om_out_1", clock).status, "done");
+    assert.equal(lookupOutbound("om_out_1", clock).layout, "main");
     // Nothing is waiting any more, and the Monitor turn itself stays quiet.
     assert.deepEqual(await done({ run, env }, RELAY, MONITOR_TURN), []);
     // With MAIN_DONE_PING=always that turn goes out too, on its own.
@@ -252,14 +257,14 @@ test(
     const records = [user("[飞书] 跑一下测试"), toolCall("我跑一下"), toolResult()];
     write(records);
     assert.deepEqual(await done({ run, env }, RELAY, "上一轮的回答"), []);
-    assert.equal(pendingAnswers(MAIN).length, 1);
+    assert.equal(pendingAnswers(MAIN, clock).length, 1);
 
     records.push(said("测试全过了。"), notification("orch-x"), said(MONITOR_TURN));
     write(records);
     const out = channelRecorder();
     await deliver(await done({ run, env }, RELAY, MONITOR_TURN), out.send);
     assert.deepEqual(out.sent, [{ channel: "feishu", text: "测试全过了。", replyTo: "om_q" }]);
-    assert.deepEqual(pendingAnswers(MAIN), []);
+    assert.deepEqual(pendingAnswers(MAIN, clock), []);
   }),
 );
 
@@ -277,6 +282,7 @@ test(
       channels: ["feishu", "telegram"],
       send: out.send,
       paired: () => true,
+      now: clock,
       log: quietLog,
       error: quietLog,
     });
