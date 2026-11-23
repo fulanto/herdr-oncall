@@ -1,4 +1,5 @@
 import { BLOCKED_HINT } from "./format.mjs";
+import { herdrJson, herdrOutput, herdrUnreachable } from "./herdr.mjs";
 import { runHerdr } from "./paths.mjs";
 
 // Who a pane is, as drover arranges it: the main session the user talks to,
@@ -84,18 +85,6 @@ export function classifyRole(name, settings = roleSettings()) {
 export const ROLE_WORDS = { supervisor: "编排者", worker: "worker" };
 const APPROVER_WORDS = { supervisor: "主会话", worker: "编排者" };
 
-function herdrJson(args, run) {
-  const result = run(args);
-  if (result?.error || result?.status !== 0 || !result?.stdout?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    return undefined;
-  }
-}
-
 // The object `agent get` describes the agent with. Herdr's JSON shapes move
 // between releases, so a few nestings are tried, as for the status.
 function agentRecord(payload) {
@@ -174,22 +163,28 @@ export function paneRole(paneId, { settings = roleSettings(), run = runHerdr } =
   return { role: classifyRole(agent?.name, settings), agent };
 }
 
-// The live agent with this name: { found: true, paneId, kind, status } or
-// { found: false, error? }. Asked every time and never cached, since a name
-// follows whoever occupies the pane and moves when the main session restarts.
+// `agent list` gave no list. Only a herdr that cannot be reached at all is
+// `unreachable`; a server that is there and failed (mid-restart, another
+// protocol version, output that is not JSON) is just no answer this time.
+function noList(result) {
+  const error = String(result?.stderr || result?.error?.message || "herdr agent list gave no list").trim();
+  return { found: false, error, ...(herdrUnreachable(result) ? { unreachable: true } : {}) };
+}
+
+// The live agent with this name: { found: true, paneId, kind, status }, or
+// { found: false } when herdr answered and no agent has it, or
+// { found: false, error, unreachable? } when it gave no list, with
+// `unreachable` when that is because there is no herdr to ask. Asked every
+// time and never cached, since a name follows whoever occupies the pane and
+// moves when the main session restarts.
 export function lookupAgentByName(name, run = runHerdr) {
   if (!name) {
     return { found: false };
   }
   const result = run(["agent", "list"]);
-  if (result?.error || result?.status !== 0 || !result?.stdout?.trim()) {
-    return { found: false, error: String(result?.stderr || result?.error?.message || "herdr agent list failed").trim() };
-  }
-  let payload;
-  try {
-    payload = JSON.parse(result.stdout);
-  } catch {
-    return { found: false, error: "herdr agent list printed no JSON" };
+  const payload = herdrOutput(result);
+  if (!payload) {
+    return noList(result);
   }
   const info = describeEntry(agentEntries(payload).find((item) => extractAgentLabel(item) === name));
   return info?.paneId ? { found: true, ...info } : { found: false };

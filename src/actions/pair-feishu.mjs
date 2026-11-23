@@ -3,6 +3,7 @@ import {
   clearFeishuPair,
   feishuRegistrationWait,
   loadDotEnv,
+  ownerOrExit,
   panelAvailable,
   printQr,
   readFeishuPair,
@@ -31,6 +32,11 @@ const CAPTION = [
   "用飞书扫码，创建 Oncall 机器人并与这台电脑配对。",
   "Esc cancels.",
 ].join("\n");
+
+// Pairing changes whom Oncall talks to: done from the session it belongs to.
+// The worker that waits for the scan is started by that session and comes
+// through here too.
+ownerOrExit("refused · pair-feishu");
 
 loadDotEnv();
 seedConfigEnv();

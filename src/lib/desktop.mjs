@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { spawn, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { envFlag } from "./config.mjs";
-import { pluginRoot, stateDir } from "./paths.mjs";
+import { paneStatePath, pluginRoot } from "./paths.mjs";
 import { blockedDelayMs } from "./gate.mjs";
 import { paneFocused } from "./herdr.mjs";
 
@@ -147,7 +147,7 @@ export function consecutiveGate(n = 2) {
 }
 
 function panelPidsPath() {
-  return join(stateDir(), "panels.json");
+  return paneStatePath("panels.json");
 }
 
 function readPanelPids() {

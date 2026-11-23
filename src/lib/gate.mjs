@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { DEFAULT_NOTIFY_ON } from "./config.mjs";
-import { stateDir } from "./paths.mjs";
+import { paneStatePath } from "./paths.mjs";
 
 export function notifyStatuses(raw = process.env.NOTIFY_ON) {
   const text = String(raw ?? DEFAULT_NOTIFY_ON);
@@ -54,7 +54,12 @@ function watched(status) {
 // { go: true } or { go: false, reason }, where `reason` is what to log, empty
 // for an event nobody is waiting on. Before this, an event dropped here left an
 // empty line in the plugin log, and so did one dropped for any other reason.
-export function eventGate(status, { enabled = true, notifyOn = process.env.NOTIFY_ON } = {}) {
+// `notOwner` is why this herdr session's events are not Oncall's to handle
+// (owner.mjs), when they are not.
+export function eventGate(status, { enabled = true, notifyOn = process.env.NOTIFY_ON, notOwner } = {}) {
+  if (notOwner) {
+    return { go: false, reason: watched(status) ? notOwner : "" };
+  }
   if (!enabled) {
     return { go: false, reason: watched(status) ? "oncall is off (toggled), nothing is sent" : "" };
   }
@@ -86,7 +91,7 @@ export function shouldDebounce(paneId, status, now = Date.now()) {
   if (!paneId || !status || !Number.isFinite(windowMs) || windowMs <= 0) {
     return false;
   }
-  const path = join(stateDir(), "last-notify.json");
+  const path = paneStatePath("last-notify.json");
   let store = {};
   try {
     store = JSON.parse(readFileSync(path, "utf8"));
@@ -113,7 +118,7 @@ export function blockedDelayMs(raw = process.env.BLOCKED_DELAY_SEC) {
 }
 
 function delayStorePath() {
-  return join(stateDir(), "blocked-delay.json");
+  return paneStatePath("blocked-delay.json");
 }
 
 function readJsonFile(path) {

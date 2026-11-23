@@ -97,18 +97,41 @@ test("what goes in is cleaned: no control characters, newlines kept, at most 200
 
 // ---------------------------------------------------------------------------
 
+// The herdr these cases run "in". Herdr gives every hook and action its socket;
+// a fixed one here keeps the cases from asking the CLI for it. Under a
+// directory that does not exist, so its path reads the same on every machine
+// (`/tmp` is a symlink on a Mac, and a socket's path is resolved).
+const SOCKET = "/oncall-test/main-inbox/herdr.sock";
+const POLL_COMMAND = "herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall";
+// What herdr prints when nothing listens on that socket.
+const DOWN = `server_not_running: no herdr server is running at ${SOCKET}`;
+
 function withState(body) {
   return async () => {
     const dir = mkdtempSync(join(tmpdir(), "oncall-main-"));
-    const previous = process.env.HERDR_PLUGIN_STATE_DIR;
+    const previous = {
+      state: process.env.HERDR_PLUGIN_STATE_DIR,
+      config: process.env.HERDR_PLUGIN_CONFIG_DIR,
+      socket: process.env.HERDR_SOCKET_PATH,
+    };
     process.env.HERDR_PLUGIN_STATE_DIR = dir;
+    // Nothing here reads the config, and should that change, it must not be
+    // the machine's own.
+    process.env.HERDR_PLUGIN_CONFIG_DIR = join(dir, "config");
+    process.env.HERDR_SOCKET_PATH = SOCKET;
     try {
       await body(dir);
     } finally {
-      if (previous === undefined) {
-        delete process.env.HERDR_PLUGIN_STATE_DIR;
-      } else {
-        process.env.HERDR_PLUGIN_STATE_DIR = previous;
+      for (const [key, value] of [
+        ["HERDR_PLUGIN_STATE_DIR", previous.state],
+        ["HERDR_PLUGIN_CONFIG_DIR", previous.config],
+        ["HERDR_SOCKET_PATH", previous.socket],
+      ]) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
       }
       rmSync(dir, { recursive: true, force: true });
     }
@@ -117,13 +140,17 @@ function withState(body) {
 
 // A herdr stand-in for the main session. `main` is what `agent list` says
 // about it (undefined: no agent has the name), `screen` and `ansi` what its
-// pane shows. Clearing keys empty the box; every argv is recorded.
+// pane shows; `down` is the error it gives while no server answers. Clearing
+// keys empty the box; every argv is recorded.
 function mainHerdr(state) {
   const calls = [];
   const run = (args) => {
     calls.push(args);
     const [group, verb] = args;
     if (group === "agent" && verb === "list") {
+      if (state.down) {
+        return { status: 1, stdout: "", stderr: `${state.down}\n` };
+      }
       const agents = state.main ? [{ name: "drover", pane_id: MAIN, ...state.main }] : [];
       return { status: 0, stdout: JSON.stringify({ result: { agents } }) };
     }
@@ -338,6 +365,129 @@ test(
   }),
 );
 
+// herdr not answering is not "no agent has that name". With the poller left
+// talking to a herdr server that had stopped, every message came back
+// "没找到主会话…跑 drover main-register" while the main session sat registered
+// in the user's own herdr.
+test(
+  "herdr not answering turns a new message away at once: which socket, why, and how to move Oncall",
+  withState(async () => {
+    const herdr = mainHerdr({ down: DOWN });
+    const chat = recorder();
+    const logs = [];
+    const outcome = await toMain("进度？", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: (line) => logs.push(line) });
+    assert.equal(outcome.ok, false);
+    assert.deepEqual(chat.said, [
+      `没送进去：herdr 连不上（${SOCKET}）：${DOWN}。Oncall 归属的这个 herdr 没在运行；它起来以后再发一次，或者在你现在用的 herdr 里跑一次 Restart reply poller（${POLL_COMMAND}）把 Oncall 切过去`,
+    ]);
+    assert.deepEqual(logs, [`main inbox · refused · 3 chars · herdr unreachable at ${SOCKET}: ${DOWN} · feishu`]);
+    // Not kept for a herdr nobody knows is coming back, and nothing typed.
+    assert.deepEqual(readInbox(), []);
+    assert.deepEqual(herdr.prompts(), []);
+
+    // The board gets it as an error, in the shape it already knows.
+    assert.deepEqual(await board("收尾：a", herdr), { ok: false, error: `herdr 连不上（${SOCKET}）：${DOWN}` });
+    assert.deepEqual(readInbox(), []);
+
+    const sent = await feishu(feishuText("/send"), feishuDeps(herdr.run, chat));
+    assert.equal(sent.skipped, "unreachable");
+    assert.equal(chat.said.at(-1), `herdr 连不上（${SOCKET}）：${DOWN}，没清草稿也没送`);
+    assert.ok(!chat.said.some((text) => text.includes("没找到主会话")));
+
+    // herdr prints its errors as a line of JSON; the reply shows the code and
+    // the message, not the envelope.
+    const json = mainHerdr({
+      down: `{"id":"cli-1","error":{"code":"server_not_running","message":"no herdr server is running at ${SOCKET}; run \`herdr\` to start or attach it"}}`,
+    });
+    assert.deepEqual(await board("收尾：a", json), {
+      ok: false,
+      error: `herdr 连不上（${SOCKET}）：server_not_running: no herdr server is running at ${SOCKET}; run \`herdr\` to start or attach it`,
+    });
+  }),
+);
+
+test(
+  "a message already waiting when herdr stops answering is kept: logged once, mentioned after half an hour, sent when herdr is back",
+  withState(async () => {
+    const state = { main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG };
+    const herdr = mainHerdr(state);
+    const chat = recorder();
+    await toMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 0, log: () => {} });
+    const logs = [];
+    const drain = (now) => drainInbox({ channelFor: () => chat.channel, settings: DROVER, run: herdr.run, now, enabled: true, log: (line) => logs.push(line) });
+
+    state.down = DOWN;
+    assert.deepEqual(await drain(5000), { waiting: "herdr" });
+    assert.deepEqual(await drain(10_000), { waiting: "herdr" });
+    assert.deepEqual(logs, [`main inbox · still waiting · herdr unreachable at ${SOCKET}: ${DOWN}`]);
+    assert.equal(readInbox().length, 1);
+    await drain(LATE_NOTICE_MS + 1000);
+    assert.equal(chat.said.at(-1), `还没送进去：「[飞书] 先别推」（herdr 连不上（${SOCKET}）），仍在暂存`);
+
+    Object.assign(state, { down: undefined, main: { agent: "claude", agent_status: "idle" }, screen: undefined });
+    assert.ok((await drain(LATE_NOTICE_MS + 6000)).delivered);
+    assert.deepEqual(herdr.prompts(), [[MAIN, "[飞书] 先别推"]]);
+  }),
+);
+
+test(
+  "herdr going down is said at once even when messages are already waiting, and those stay where they are",
+  withState(async () => {
+    const state = { main: { agent: "claude", agent_status: "blocked" }, screen: DIALOG };
+    const herdr = mainHerdr(state);
+    const chat = recorder();
+    await toMain("先别推", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 0, log: () => {} });
+
+    state.down = DOWN;
+    const outcome = await toMain("还有这个", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    assert.equal(outcome.ok, false);
+    // Not "已暂存，排在前面 1 条后面": queued behind the first, the user would
+    // learn that herdr is gone half an hour later.
+    assert.match(chat.said.at(-1), /^没送进去：herdr 连不上（/);
+    assert.deepEqual(
+      readInbox().map((item) => item.text),
+      ["[飞书] 先别推"],
+    );
+  }),
+);
+
+test(
+  "a herdr that is there but gave no list is not gone: the message waits out the usual grace instead of being turned away",
+  withState(async () => {
+    // A protocol mismatch right after an upgrade, a server in the middle of
+    // restarting: `agent list` fails, and says nothing about the server being gone.
+    const state = { down: '{"id":"cli-1","error":{"code":"protocol_mismatch","message":"client 12, server 11"}}' };
+    const herdr = mainHerdr(state);
+    const chat = recorder();
+    const outcome = await toMain("进度？", { channel: chat.channel, settings: DROVER, run: herdr.run, now: 1000, log: () => {} });
+    assert.equal(outcome.reason, "absent");
+    assert.deepEqual(chat.said, []);
+    assert.equal(readInbox().length, 1);
+
+    Object.assign(state, { down: undefined, main: { agent: "claude", agent_status: "idle" } });
+    const drained = await drainInbox({ channelFor: () => chat.channel, settings: DROVER, run: herdr.run, now: 6000, enabled: true, log: () => {} });
+    assert.ok(drained.delivered);
+    assert.deepEqual(herdr.prompts(), [[MAIN, "[飞书] 进度？"]]);
+  }),
+);
+
+test(
+  "the board in a herdr session that does not own Oncall is refused: nothing asked of herdr, nothing typed, nothing queued",
+  withState(async (dir) => {
+    writeFileSync(join(dir, "owner.json"), JSON.stringify({ socket: "/elsewhere/herdr.sock", since: 1, via: "startup" }));
+    const herdr = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
+    const logs = [];
+    assert.deepEqual(await board("全部收尾：a", herdr, { log: (line) => logs.push(line), owned: undefined }), {
+      ok: false,
+      error: `这个 herdr 会话（${SOCKET}）不是 Oncall 的归属会话（归属：/elsewhere/herdr.sock），没送；要切过来，在这个 herdr 里跑 ${POLL_COMMAND}`,
+    });
+    assert.deepEqual(herdr.calls, []);
+    assert.deepEqual(readInbox(), []);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /^send-main · refused · this herdr session .* does not own Oncall, \/elsewhere\/herdr\.sock does/);
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // The chat side: what a Feishu (or Telegram) message does once MAIN_AGENT_NAME
 // is set, through the real handlers.
@@ -520,8 +670,18 @@ test(
 // drover's task board: what the user clicked goes in through send-main.mjs
 // (sendFromBoard), the same delivery as a chat message, but it is not a chat.
 
+// The board runs in the herdr session that owns Oncall, as drover's does; the
+// case for one that does not passes `owned: undefined` and reads the record.
 function board(text, herdr, extra = {}) {
-  return sendFromBoard(text, { settings: DROVER, run: herdr.run, now: 1000, enabled: true, log: () => {}, ...extra });
+  return sendFromBoard(text, {
+    settings: DROVER,
+    run: herdr.run,
+    now: 1000,
+    enabled: true,
+    log: () => {},
+    owned: () => ({ mine: true, socket: SOCKET }),
+    ...extra,
+  });
 }
 
 // Records which chats a drain asked for, and has none: the board's messages

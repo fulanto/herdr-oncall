@@ -6,6 +6,7 @@ import {
   missingIntegrations,
   modeEnabled,
   modeHint,
+  ownerOrExit,
   panelState,
   remoteChannels,
   rolesActive,
@@ -14,6 +15,10 @@ import {
   setupHints,
   showPanel,
 } from "../lib/index.mjs";
+
+// A test ping is a real message on the user's phone: sent from the session
+// Oncall belongs to, not from whichever session someone is trying things in.
+ownerOrExit("refused · test");
 
 loadDotEnv();
 

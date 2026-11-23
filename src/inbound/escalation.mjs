@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
   blockedSnippet,
   callState,
@@ -10,6 +10,7 @@ import {
   escalationText,
   lookupAgentByName,
   modeEnabled,
+  paneStatePath,
   panelAvailable,
   panelFocus,
   pingChannels,
@@ -23,7 +24,6 @@ import {
   sessionDialogBody,
   showPanel,
   sleep,
-  stateDir,
   stuckFor,
 } from "../lib/index.mjs";
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "./reply.mjs";
@@ -41,7 +41,7 @@ import { describeError } from "./poller.mjs";
 export const ESCALATION_CHECK_MS = 30_000;
 
 function storePath() {
-  return join(stateDir(), "escalations.json");
+  return paneStatePath("escalations.json");
 }
 
 export function readEscalations() {

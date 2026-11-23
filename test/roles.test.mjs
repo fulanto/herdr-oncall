@@ -49,6 +49,12 @@ const ENTRIES = [
   { agent: "claude", agent_status: "working", name: "hca-e2e", pane_id: "w7M:p1" },
 ];
 
+// What the herdr CLI prints on stderr when nothing listens on its socket
+// (herdr src/cli.rs: a NotFound or ConnectionRefused connect error becomes a
+// `server_not_running` JSON error).
+const SERVER_DOWN =
+  '{"id":"cli-1","error":{"code":"server_not_running","message":"no herdr server is running at /home/u/.config/herdr/herdr.sock; run `herdr` to start or attach it"}}';
+
 function fakeRun({ get = {}, list = ENTRIES, calls = [] } = {}) {
   return (args) => {
     calls.push(args.join(" "));
@@ -57,7 +63,7 @@ function fakeRun({ get = {}, list = ENTRIES, calls = [] } = {}) {
       return entry ? { status: 0, stdout: agentGet(entry) } : { status: 1, stdout: "", stderr: "agent_not_found" };
     }
     if (args[0] === "agent" && args[1] === "list") {
-      return list ? { status: 0, stdout: agentList(list) } : { status: 1, stdout: "", stderr: "server not running" };
+      return list ? { status: 0, stdout: agentList(list) } : { status: 1, stdout: "", stderr: `${SERVER_DOWN}\n` };
     }
     return { status: 1, stdout: "" };
   };
@@ -247,9 +253,36 @@ test("the main session is found by name in the list, every time", () => {
     status: "idle",
     paneId: "w1Z:p1",
   });
+  // herdr not answering is its own answer, not "nobody has that name" (which
+  // is the bare { found: false } above).
   const down = lookupAgentByName("drover", fakeRun({ list: null }));
   assert.equal(down.found, false);
-  assert.match(down.error, /server not running/);
+  assert.equal(down.unreachable, true);
+  assert.match(down.error, /server_not_running/);
+});
+
+test("only a herdr that cannot be reached is unreachable; any other failed answer is just no answer yet", () => {
+  const failing = (result) => lookupAgentByName("drover", () => result);
+  // No server on the socket, and no herdr to run at all.
+  assert.equal(failing({ status: 1, stdout: "", stderr: SERVER_DOWN }).unreachable, true);
+  const noBinary = failing({ error: Object.assign(new Error("spawnSync herdr ENOENT"), { code: "ENOENT" }), status: null });
+  assert.equal(noBinary.unreachable, true);
+  assert.match(noBinary.error, /ENOENT/);
+
+  // A server that is there but did not give a list: mid-restart, a protocol
+  // mismatch after an upgrade, output that is not JSON. None of these says
+  // the server is gone, so the caller keeps its usual patience.
+  for (const result of [
+    { status: 1, stdout: "", stderr: '{"id":"cli-1","error":{"code":"protocol_mismatch","message":"client 12, server 11"}}' },
+    { status: 1, stdout: "", stderr: "" },
+    { status: 0, stdout: "not json" },
+    { status: 0, stdout: "" },
+  ]) {
+    const answer = failing(result);
+    assert.equal(answer.found, false);
+    assert.equal(answer.unreachable, undefined, JSON.stringify(result));
+    assert.ok(answer.error, JSON.stringify(result));
+  }
 });
 
 test("an orchestrator under a Codex main session escalates sooner", () => {

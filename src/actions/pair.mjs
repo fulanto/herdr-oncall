@@ -1,5 +1,6 @@
 import {
   loadDotEnv,
+  ownerOrExit,
   pairDeepLink,
   printQr,
   seedConfigEnv,
@@ -7,6 +8,9 @@ import {
   telegramGetMe,
 } from "../lib/index.mjs";
 import { ensurePoller } from "../inbound/poller.mjs";
+
+// Pairing changes whom Oncall talks to: done from the session it belongs to.
+ownerOrExit("refused · pair");
 
 loadDotEnv();
 seedConfigEnv();

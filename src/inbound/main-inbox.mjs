@@ -1,14 +1,20 @@
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
+  actionCommand,
   attachmentLine,
   bareToMain,
   channelPaired,
   chatPartsText,
   dialogQuestion,
+  herdrSocket,
   lookupAgentByName,
   mainDonePlan,
   modeEnabled,
+  notOwnerReason,
+  ownership,
+  ownershipLines,
+  paneStatePath,
   pingChannels,
   readPaneScreen,
   readPaneScreenAnsi,
@@ -22,7 +28,9 @@ import {
   sleep,
   stateDir,
   textParts,
+  tryLock,
   undeliveredNote,
+  unlock,
 } from "../lib/index.mjs";
 import {
   NO_TARGET,
@@ -82,6 +90,44 @@ export function helpText(settings = roleSettings()) {
 
 export function notFoundText(settings = roleSettings()) {
   return `没找到主会话（herdr 里名为 ${settings.mainAgentName} 的 agent），在主会话里跑 drover main-register`;
+}
+
+// herdr prints an error as one line of JSON on stderr
+// ({"id":…,"error":{"code","message"}}); a person is shown `code: message`,
+// and whatever else it printed as it is.
+function herdrReason(error) {
+  const line = String(error ?? "")
+    .split("\n")
+    .map((part) => part.trim())
+    .find(Boolean);
+  if (!line) {
+    return "herdr gave no answer";
+  }
+  try {
+    const failure = JSON.parse(line).error;
+    return [failure.code, failure.message].filter(Boolean).join(": ").slice(0, 200) || line.slice(0, 200);
+  } catch {
+    return line.slice(0, 200);
+  }
+}
+
+// herdr cannot be reached, which is not "no agent has that name". The two used
+// to be one: when the poller was left talking to a herdr server that had
+// stopped, every message came back "没找到主会话…跑 drover main-register", while
+// the main session sat registered in the user's own herdr. The socket is the
+// one this process talks to, so the user can tell which herdr Oncall is waiting
+// for. Returns the sentence, and the same in English for the log.
+function herdrDown(main) {
+  const socket = herdrSocket().path;
+  const reason = herdrReason(main?.error);
+  return { text: `herdr 连不上（${socket}）：${reason}`, where: `herdr 连不上（${socket}）`, log: `herdr unreachable at ${socket}: ${reason}` };
+}
+
+// A new message is turned away at once. Nothing says this herdr is coming
+// back soon, and the reply is the main way the user learns that the herdr
+// Oncall belongs to is gone, so it says how to move Oncall to the one in use.
+export function unreachableText(main) {
+  return `没送进去：${herdrDown(main).text}。Oncall 归属的这个 herdr 没在运行；它起来以后再发一次，或者在你现在用的 herdr 里跑一次 Restart reply poller（${actionCommand("poll")}）把 Oncall 切过去`;
 }
 
 // Control characters out, \r\n and \r to \n, tabs to a space, then at most
@@ -255,7 +301,15 @@ export function inputDraft(ansi) {
 // ---------------------------------------------------------------------------
 // Where the main session is, and whether a message can go in now.
 
+// Why nobody was found by the main session's name: herdr itself cannot be
+// reached, or it answered and nobody has the name (which is also what a list
+// that failed for any other reason counts as: no answer this time).
+function missing(main) {
+  return main.unreachable ? "unreachable" : "absent";
+}
+
 // { state, main, question?, draft? } where state is
+//   "unreachable" there is no herdr to ask: no telling who is there
 //   "absent"     no live agent has the name
 //   "blocked"    a dialog or a question is waiting: typing would answer it
 //   "draft"      the prompt box holds unsent text the message would join
@@ -267,7 +321,7 @@ export function inputDraft(ansi) {
 export function mainState({ settings = roleSettings(), run = runHerdr } = {}) {
   const main = lookupAgentByName(settings.mainAgentName, run);
   if (!main.found) {
-    return { state: "absent", main };
+    return { state: missing(main), main };
   }
   const screen = readPaneScreen(main.paneId, {}, run);
   if (main.status === "blocked" || screenHasOpenMenu(screen)) {
@@ -311,6 +365,8 @@ function waitingReason(verdict, settings) {
       return "主会话还在处理上一件事";
     case "absent":
       return `没找到名为 ${settings.mainAgentName} 的主会话`;
+    case "unreachable":
+      return herdrDown(verdict.main).where;
     default:
       return "主会话暂时收不了";
   }
@@ -351,7 +407,7 @@ function inboxPath() {
 // Every chat message that went into the main session and has not had its
 // answer sent back yet (the notify hook finds it in the session record).
 function pendingPath() {
-  return join(stateDir(), "main-pending.json");
+  return paneStatePath("main-pending.json");
 }
 
 function readJson(path, fallback) {
@@ -391,48 +447,11 @@ function lockPath() {
   return join(stateDir(), "main-inbox.lock");
 }
 
-function lockAbandoned(path) {
-  let pid;
-  let age;
-  try {
-    pid = Number(readFileSync(path, "utf8").trim());
-    age = Date.now() - statSync(path).mtimeMs;
-  } catch {
-    // Released while we looked: the next try takes it.
-    return false;
-  }
-  if (age > INBOX_LOCK_STALE_MS) {
-    return true;
-  }
-  if (!(pid > 1)) {
-    // Created a moment ago, its pid not written yet.
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return error?.code === "ESRCH";
-  }
-}
-
 export async function withInboxLock(work, { timeoutMs = INBOX_LOCK_WAIT_MS, wait = sleep } = {}) {
   const path = lockPath();
   mkdirSync(dirname(path), { recursive: true });
   const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      writeFileSync(path, `${process.pid}\n`, { flag: "wx" });
-      break;
-    } catch (error) {
-      if (error?.code !== "EEXIST") {
-        throw error;
-      }
-    }
-    if (lockAbandoned(path)) {
-      rmSync(path, { force: true });
-      continue;
-    }
+  while (!tryLock(path, { staleMs: INBOX_LOCK_STALE_MS })) {
     if (Date.now() >= deadline) {
       throw new Error(`主会话的投递正忙，等了 ${Math.round(timeoutMs / 1000)} 秒还没轮到`);
     }
@@ -441,7 +460,7 @@ export async function withInboxLock(work, { timeoutMs = INBOX_LOCK_WAIT_MS, wait
   try {
     return await work();
   } finally {
-    rmSync(path, { force: true });
+    unlock(path);
   }
 }
 
@@ -552,9 +571,47 @@ export async function routeToMain(
   return placed.outcome;
 }
 
+// A message that can go in now is typed in. Returns what to answer, or nothing
+// when the main session turned out to be in a dialog after all (herdr answered
+// agent_blocked), which leaves the message to be kept like any other.
+function typeNow(item, verdict, { run, now, log }) {
+  const typed = typeIntoMain(verdict.main.paneId, item, run);
+  if (typed.outcome === "sent") {
+    if (item.channel !== BOARD) {
+      rememberPendingAnswer({ id: item.id, paneId: verdict.main.paneId, channel: item.channel, messageId: item.messageId, text: item.text }, now);
+    }
+    log(logLine("delivered", item, verdict.main.status || verdict.state));
+    return {
+      outcome: { ok: true, delivered: true, paneId: verdict.main.paneId, state: verdict.state },
+      chat: deliveredNotice(verdict.state, item, now),
+      board: `${verdict.state === "working" ? "已送进主会话，它做完手上这件就看" : "已送进主会话"}${itemNote(item)}`,
+    };
+  }
+  if (typed.outcome === "failed") {
+    log(logLine("refused", item, `herdr: ${herdrErrorText(typed.result)}`));
+    const text = `没送进去：${herdrErrorText(typed.result)}`;
+    return { outcome: { ok: false, failed: true }, chat: text, board: text };
+  }
+  return undefined;
+}
+
+// herdr did not answer: the message is turned away now, not kept.
+function turnedAway(item, verdict, log) {
+  const down = herdrDown(verdict.main);
+  log(logLine("refused", item, down.log));
+  return { outcome: { ok: false, failed: true }, chat: unreachableText(verdict.main), board: down.text };
+}
+
 // routeToMain's decision, under the inbox lock: the outcome, and what to tell
 // a chat ("" for nothing) or the board.
 function placeInMain(item, { settings, run, now, log, enabled }) {
+  // Asked first, before the line is looked at: with herdr gone, a message
+  // must not be told "queued behind N others" and left to find out half an
+  // hour later. What is already waiting stays where it is.
+  const verdict = mainState({ settings, run });
+  if (verdict.state === "unreachable") {
+    return turnedAway(item, verdict, log);
+  }
   const waiting = readInbox();
   const stash = (reason, extra = {}) => writeInbox([...waiting, { ...item, stashedAt: now, reason, ...extra }]);
   // Order is kept: nothing overtakes a message that is already waiting, except
@@ -569,24 +626,10 @@ function placeInMain(item, { settings, run, now, log, enabled }) {
       board: `前面还有 ${ahead} 条在排队，已排在后面，按顺序送${itemNote(item)}`,
     };
   }
-  const verdict = mainState({ settings, run });
   if (verdict.state === "ready" || verdict.state === "working") {
-    const typed = typeIntoMain(verdict.main.paneId, item, run);
-    if (typed.outcome === "sent") {
-      if (item.channel !== BOARD) {
-        rememberPendingAnswer({ id: item.id, paneId: verdict.main.paneId, channel: item.channel, messageId: item.messageId, text: item.text }, now);
-      }
-      log(logLine("delivered", item, verdict.main.status || verdict.state));
-      return {
-        outcome: { ok: true, delivered: true, paneId: verdict.main.paneId, state: verdict.state },
-        chat: deliveredNotice(verdict.state, item, now),
-        board: `${verdict.state === "working" ? "已送进主会话，它做完手上这件就看" : "已送进主会话"}${itemNote(item)}`,
-      };
-    }
-    if (typed.outcome === "failed") {
-      log(logLine("refused", item, `herdr: ${herdrErrorText(typed.result)}`));
-      const text = `没送进去：${herdrErrorText(typed.result)}`;
-      return { outcome: { ok: false, failed: true }, chat: text, board: text };
+    const answered = typeNow(item, verdict, { run, now, log });
+    if (answered) {
+      return answered;
     }
     verdict.state = "blocked";
   }
@@ -681,6 +724,9 @@ function drainFirst({ settings, run, now, enabled, log, say }) {
     say(first, notFoundText(settings));
     return { refused: first.id };
   }
+  // A message already waiting when herdr stops answering is kept, not turned
+  // away: it was accepted, and it goes in when herdr is back.
+  noteOutage(verdict, first, log);
   const late = items.filter((item) => mayGoNow(item, enabled) && !item.lateNoticeAt && now - Number(item.at) >= LATE_NOTICE_MS);
   writeInbox(
     items.map((item) => {
@@ -698,7 +744,20 @@ function drainFirst({ settings, run, now, enabled, log, say }) {
   for (const item of late) {
     say(item, `还没送进去：「${short(item.text)}」（${waitingReason(verdict, settings)}），仍在暂存`);
   }
-  return { waiting: verdict.state };
+  return { waiting: waitingOn(verdict.state) };
+}
+
+// What a pass that sent nothing reports it is waiting on. herdr not answering
+// goes by the name the failed-prompt branch above already uses.
+function waitingOn(state) {
+  return state === "unreachable" ? "herdr" : state;
+}
+
+// Said once per outage: the first item's `reason` is what the last pass found.
+function noteOutage(verdict, first, log) {
+  if (verdict.state === "unreachable" && first.reason !== "unreachable") {
+    log(`main inbox · still waiting · ${herdrDown(verdict.main).log}`);
+  }
 }
 
 // What send-main.mjs prints for drover's task board (the contract with drover,
@@ -707,9 +766,18 @@ function drainFirst({ settings, run, now, enabled, log, say }) {
 //   { ok: true, result: "delivered", reason: "ready"|"working", notice }
 //   { ok: true, result: "queued", reason: "queued"|"blocked"|"draft"|"codex-busy"|"absent", notice }
 //   { ok: false, error }
-export async function sendFromBoard(text, { settings = roleSettings(), run = runHerdr, now = Date.now(), enabled = modeEnabled(), log = console.log } = {}) {
+// `owned` is asked only once it is known there is a main session to send to,
+// so without drover nothing is read and herdr is not asked.
+export async function sendFromBoard(
+  text,
+  { settings = roleSettings(), run = runHerdr, now = Date.now(), enabled = modeEnabled(), log = console.log, owned = () => ownership({ run }) } = {},
+) {
   if (!rolesActive(settings)) {
     return { ok: false, error: "MAIN_AGENT_NAME 没设（不是 drover 环境），没有主会话可送" };
+  }
+  const elsewhere = boardElsewhere(owned(), log);
+  if (elsewhere) {
+    return elsewhere;
   }
   const outcome = await routeToMain(textParts(text), { channel: { name: BOARD }, settings, run, now, log, enabled });
   if (outcome.skipped) {
@@ -721,6 +789,25 @@ export async function sendFromBoard(text, { settings = roleSettings(), run = run
   return outcome.delivered
     ? { ok: true, result: "delivered", reason: outcome.state, notice: outcome.notice }
     : { ok: true, result: "queued", reason: outcome.reason, notice: outcome.notice };
+}
+
+// A board running in a herdr session that does not own Oncall is refused: the
+// agent it would find by the main session's name there is not the main session
+// Oncall serves. Returns what to print then, and nothing when the session is
+// the owner.
+function boardElsewhere(own, log) {
+  for (const line of ownershipLines(own)) {
+    log(line);
+  }
+  if (own.mine) {
+    return undefined;
+  }
+  log(`send-main · refused · ${notOwnerReason(own)}`);
+  const owner = own.owner?.socket ?? "还没有";
+  return {
+    ok: false,
+    error: `这个 herdr 会话（${own.socket}）不是 Oncall 的归属会话（归属：${owner}），没送；要切过来，在这个 herdr 里跑 ${actionCommand("poll")}`,
+  };
 }
 
 // /send: empties the prompt box, then lets the inbox go. The draft is gone
@@ -748,18 +835,22 @@ export async function clearDraft(paneId, { run = runHerdr, wait = sleep, attempt
   return left ? { ok: false, draft: first, error: "the draft is still there" } : { ok: true, draft: first };
 }
 
+// Why /send does nothing in these states, by state. A dialog's cursor line
+// ("❯ 1. Yes", Codex "› 1. Yes") looks like a box with text in it; clearing
+// keys must never go into a dialog.
+const SEND_REFUSED = {
+  unreachable: (verdict) => `${herdrDown(verdict.main).text}，没清草稿也没送`,
+  absent: (_verdict, settings) => notFoundText(settings),
+  blocked: (verdict) => `主会话在等确认：${verdict.question || "（确认框）"}。先回那条确认通知，没有清草稿`,
+};
+
 async function sendCommand({ channel, settings, run, wait, now, log, channelFor }) {
   const items = readInbox();
   const verdict = mainState({ settings, run });
-  if (verdict.state === "absent") {
-    await channel.reply(notFoundText(settings));
-    return { skipped: "absent" };
-  }
-  // A dialog's cursor line ("❯ 1. Yes", Codex "› 1. Yes") looks like a box
-  // with text in it; clearing keys must never go into a dialog.
-  if (verdict.state === "blocked") {
-    await channel.reply(`主会话在等确认：${verdict.question || "（确认框）"}。先回那条确认通知，没有清草稿`);
-    return { skipped: "blocked" };
+  const refused = SEND_REFUSED[verdict.state];
+  if (refused) {
+    await channel.reply(refused(verdict, settings));
+    return { skipped: verdict.state };
   }
   const cleared = verdict.state === "draft" ? await clearDraft(verdict.main.paneId, { run, wait }) : { ok: true, draft: "" };
   if (!cleared.ok) {

@@ -10,7 +10,7 @@ export const OLD_PLUGIN_IDS = ["oncall", "oncall.telegram", "fulanto.oncall"];
 
 // Herdr names its own directories after the build it is: a release binary uses
 // `herdr`, a debug one `herdr-dev`.
-const HERDR_APP_DIRS = ["herdr", "herdr-dev"];
+export const HERDR_APP_DIRS = ["herdr", "herdr-dev"];
 
 export function herdrBin() {
   return process.env.HERDR_BIN_PATH || "herdr";
@@ -83,6 +83,29 @@ export function stateDir() {
     return managed;
   }
   return join(stateHome() ?? pluginRoot, "herdr-oncall");
+}
+
+// The state files that name panes. A pane id only means something inside the
+// Herdr server it came from: every server numbers its workspaces from w1, so
+// two sessions both have a `w1:p1`. These files therefore belong to the session
+// that owns Oncall (owner.mjs), and are dropped when the ownership moves: a
+// reply to an old ping would otherwise be typed into whatever pane has that id
+// in the new session. A file that names a pane gets its path from here, so it
+// cannot be left off the list.
+export const PANE_STATE_FILES = [
+  "outbound.json",
+  "escalations.json",
+  "main-pending.json",
+  "panels.json",
+  "blocked-delay.json",
+  "last-notify.json",
+];
+
+export function paneStatePath(name) {
+  if (!PANE_STATE_FILES.includes(name)) {
+    throw new Error(`${name} is not in PANE_STATE_FILES`);
+  }
+  return join(stateDir(), name);
 }
 
 export function sleep(ms) {

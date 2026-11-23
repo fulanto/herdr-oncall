@@ -8,6 +8,9 @@ import {
   loadDotEnv,
   missingIntegrations,
   modeEnabled,
+  notOwnerReason,
+  ownership,
+  ownershipLines,
   panelState,
   pluginRoot,
   rolesActive,
@@ -37,13 +40,20 @@ if (!alreadyLinked) {
 }
 
 const envPath = seedConfigEnv();
-const pid = restartPoller();
+// Linking and seeding the config are the same in every herdr session: the
+// plugin registry and the config dir are the machine's. The poller is the
+// owner session's, so a setup run anywhere else leaves it where it is.
+const own = ownership();
+const pid = own.mine ? restartPoller() : 0;
 // Read only for the hints below, after the poller is spawned, so the poller
 // still loads its own .env exactly as it did before.
 loadDotEnv();
 console.log(`plugin: ${PLUGIN_ID}`);
 console.log(`config: ${envPath}`);
-console.log(`poller: ${pid}`);
+for (const line of ownershipLines(own)) {
+  console.log(line);
+}
+console.log(own.mine ? `poller: ${pid}` : `poller: left alone · ${notOwnerReason(own)}`);
 const integrations = integrationLines(ensureIntegrations());
 if (integrations.length) {
   console.log(integrations.join("\n"));

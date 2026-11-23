@@ -6,6 +6,7 @@ import {
   feishuCreds,
   feishuOpenId,
   loadDotEnv,
+  ownerOrExit,
   remoteChannels,
   runHerdrAsync,
   seedConfigEnv,
@@ -13,19 +14,34 @@ import {
   sleep,
   telegramGetUpdates,
 } from "../lib/index.mjs";
-import { describeError, withTimestamps, writePollerPid } from "../inbound/poller.mjs";
+import {
+  POLLER_SELF_CHECK_MS,
+  describeError,
+  pollerSuperseded,
+  withTimestamps,
+  writePollerBinding,
+  writePollerPid,
+} from "../inbound/poller.mjs";
 import { feishuChannel, handleFeishuEvent } from "../inbound/feishu.mjs";
 import { handleTelegramUpdate, pollEnabled, readOffset, telegramChannel, writeOffset } from "../inbound/reply.mjs";
 import { escalationLoop } from "../inbound/escalation.mjs";
 import { inboxLoop } from "../inbound/main-inbox.mjs";
 
-seedConfigEnv();
-loadDotEnv();
 // This process is detached with its output redirected to <state>/poller.log,
 // so every line needs to say when it happened.
 withTimestamps();
+// The poller serves the herdr session that owns Oncall and no other: one
+// started anywhere else (by hand, in a test session) stands down here, before
+// it touches the pid file. From here on every herdr call this process makes
+// names that session's socket, whatever environment it was started from, and
+// the binding is on file for `ensurePoller` and `status` to check.
+const own = ownerOrExit("not started · poller", { code: 0 });
+process.env.HERDR_SOCKET_PATH = own.socket;
+seedConfigEnv();
+loadDotEnv();
 writePollerPid(process.pid);
-console.log(`oncall poller started pid=${process.pid}`);
+writePollerBinding({ pid: process.pid, socket: own.socket });
+console.log(`oncall poller started pid=${process.pid} herdr=${own.socket}`);
 
 // An idle poller looks exactly like a working one: silent. Saying why it is
 // idle, once per change rather than once per pass, is the difference between
@@ -194,12 +210,28 @@ async function updateLoop() {
   }
 }
 
+// At most one poller, and only the one on record for the session that owns
+// Oncall: this one checks that it still is, and stops when it is not. Being
+// stopped by pid only reaches the poller that is on record (see
+// pollerSuperseded in inbound/poller.mjs).
+async function selfCheckLoop() {
+  while (true) {
+    await sleep(POLLER_SELF_CHECK_MS);
+    const why = pollerSuperseded({ socket: own.socket });
+    if (why) {
+      console.log(`oncall poller stopping pid=${process.pid} · ${why}`);
+      process.exit(0);
+    }
+  }
+}
+
 // With drover: an orchestrator's or a worker's dialog that nobody answered in
 // time (escalationLoop), and messages for the main session that could not go
 // in when they arrived (inboxLoop). Both reread the config every pass, so a
 // rewritten drover.env reaches them without a restart, and both are idle while
 // there is nothing on file.
 await Promise.all([
+  selfCheckLoop(),
   telegramLoop(),
   feishuLoop(),
   updateLoop(),

@@ -1,5 +1,35 @@
 import { runHerdr, sleep } from "./paths.mjs";
 
+// The JSON a herdr command printed, or nothing when it failed, printed
+// nothing, or printed something that is not JSON.
+export function herdrOutput(result) {
+  if (result?.error || result?.status !== 0 || !result?.stdout?.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+export function herdrJson(args, run = runHerdr) {
+  return herdrOutput(run(args));
+}
+
+// Whether a failed herdr call failed because there is no herdr to talk to:
+// the CLI could not be run at all, or it found nobody listening on its socket
+// (herdr src/cli.rs turns a NotFound or ConnectionRefused connect error into a
+// `server_not_running` error, printed as JSON on stderr). Every other failure
+// came from a server that is there: one mid-restart, one speaking another
+// protocol version after an upgrade, one that printed something unexpected.
+export function herdrUnreachable(result) {
+  if (result?.error) {
+    return true;
+  }
+  return `${result?.stderr ?? ""} ${result?.stdout ?? ""}`.includes("server_not_running");
+}
+
 export function extractAgentStatus(payload) {
   const roots = [payload?.result, payload?.result?.data, payload?.data, payload].filter(Boolean);
   for (const root of roots) {

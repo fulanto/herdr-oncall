@@ -1,18 +1,26 @@
-import { loadDotEnv, oncallStatus } from "../lib/index.mjs";
+import { herdrSocket, loadDotEnv, oncallStatus, readOwner, socketAlive } from "../lib/index.mjs";
 import { readEscalations } from "../inbound/escalation.mjs";
 import { readInbox } from "../inbound/main-inbox.mjs";
-import { pollerAlive } from "../inbound/poller.mjs";
+import { pollerAlive, pollerBinding, pollerPid } from "../inbound/poller.mjs";
 
 // One line of JSON on stdout and nothing else, exit 0 whether or not anything
 // is paired or switched on: drover runs this script directly
 // (`/bin/bash <plugin_root>/bin/run-node.sh src/actions/status.mjs`) because
 // `herdr plugin action invoke` returns before the output exists. Only a
 // failure of the script itself exits non-zero, still with one line of JSON.
-// It reads, never writes: no seeding, no poller, no network.
+// It reads, never writes: no seeding, no poller, no network, and it answers in
+// any herdr session without claiming Oncall for it. The one thing it reaches
+// for is the owner's socket, to say whether a server is listening there.
 try {
   loadDotEnv();
+  const owner = readOwner();
+  const pid = pollerPid();
   const status = oncallStatus({
-    pollerAlive: () => pollerAlive(),
+    pollerAlive: () => pollerAlive(pid),
+    session: herdrSocket(),
+    owner,
+    ownerRunning: owner ? await socketAlive(owner.socket) : null,
+    poller: { pid, socket: pollerBinding(pid)?.socket },
     extra: {
       pending: { escalations: Object.keys(readEscalations()).length, main_inbox: readInbox().length },
     },

@@ -27,7 +27,10 @@ import {
   markBlockedDelay,
   modeEnabled,
   nextDialog,
+  notOwnerReason,
   notifyPlan,
+  ownership,
+  ownershipLines,
   paneAgentName,
   paneIdFrom,
   paneRole,
@@ -64,13 +67,30 @@ import { mainDonePings, pendingAnswers, sendMainPings } from "../inbound/main-in
 // Feishu while `test` still did, the log had nothing to offer: a hook that
 // dropped the event, one that waited and found the dialog answered, and one
 // that sent the ping all left the same empty line.
-loadDotEnv();
-ensurePoller();
-
 const context = readJsonEnv("HERDR_PLUGIN_CONTEXT_JSON");
 const event = readJsonEnv("HERDR_PLUGIN_EVENT_JSON");
 const paneId = paneIdFrom(event, context);
 const reported = resolveStatus(event, context);
+
+// Herdr fires this hook for the panes of every session a machine runs, and a
+// pane id means something only in the server it came from. Oncall serves one
+// session (src/lib/owner.mjs): an event from any other ends here, before the
+// poller, a ping, a panel or a state file is touched. A status someone waits
+// on says why; working and idle, which arrive every turn, stay silent.
+const own = ownership();
+for (const line of ownershipLines(own)) {
+  console.log(line);
+}
+if (!own.mine) {
+  const { reason } = eventGate(reported, { notOwner: notOwnerReason(own) });
+  if (reason) {
+    console.log(`not sent · ${reported} · ${paneId} · ${reason}`);
+  }
+  process.exit(0);
+}
+
+loadDotEnv();
+ensurePoller();
 
 if (!modeEnabled()) {
   const { reason } = eventGate(reported, { enabled: false });
@@ -122,6 +142,19 @@ if (promoted) {
 // A form has a handful of tabs. The cap is only a backstop against a dialog
 // that keeps changing shape without ever being satisfied.
 const MAX_FORM_ANSWERS = 12;
+
+// This hook can wait a minute or more before it does anything a user sees (a
+// panel's timeout, BLOCKED_DELAY_SEC), and `poll` in another session can move
+// Oncall there meanwhile. So the ownership is read again before a ping, a
+// panel or an armed escalation: a pane that is no longer Oncall's is not
+// pinged, and the record of it is not written into the new owner's state.
+function stillOwnerOrExit() {
+  const now = ownership({ claim: "never" });
+  if (!now.mine) {
+    console.log(`not sent · ${where} · ${notOwnerReason(now)}`);
+    process.exit(0);
+  }
+}
 
 function readScreen() {
   if (status === "blocked") {
@@ -294,6 +327,7 @@ function panelShouldClose() {
 // "yielded" | "unavailable" | "timeout" | "dismiss" | "skipped". No panel takes
 // the keyboard as it opens; panelFocus says whether it can be clicked into.
 async function runPanel({ options, body, timeoutMs, fingerprint, call }) {
+  stillOwnerOrExit();
   if (userAtPane(paneId)) {
     console.log(`panel skipped · ${where} · pane is on screen`);
     return "skipped";
@@ -330,6 +364,7 @@ async function runPanel({ options, body, timeoutMs, fingerprint, call }) {
 }
 
 async function pingRemote(screen, doneBody, { replyTo } = {}) {
+  stillOwnerOrExit();
   if (!channels.length) {
     console.log(`not sent · ${where} · no paired phone channel in CHANNEL=${channelList().join(",")}`);
     return;
@@ -375,6 +410,7 @@ async function pingRemote(screen, doneBody, { replyTo } = {}) {
 // After the wait: send, or say why not. A newer blocked event for the pane
 // owns the ping now, and a dialog gone from the screen was answered.
 async function pingAfterWait(started) {
+  stillOwnerOrExit();
   const later = await readScreenSettled(readScreen, { sleep });
   const stillMine = blockedDelayStillMine(paneId, started);
   const verdict = blockedWaitVerdict({ stillMine, screen: later, real: stillMine && blockedIsReal(later) });
@@ -409,6 +445,7 @@ if (role === "supervisor" || role === "worker") {
     }
     const mainKind = role === "supervisor" ? lookupAgentByName(settings.mainAgentName).kind : undefined;
     const thresholdSec = escalateAfterSec({ role, mainKind, settings });
+    stillOwnerOrExit();
     const { kept, record } = armEscalation({
       paneId,
       role,
@@ -634,6 +671,7 @@ if (usePanel && isDone && !shouldDebounce(paneId, "panel:done")) {
 // text goes out bare, without the title and location line: it is the main
 // session talking (src/inbound/main-inbox.mjs, mainDonePings / sendMainPings).
 async function mainDone(turnAnswer) {
+  stillOwnerOrExit();
   const pings = await mainDonePings({ paneId, where, turnAnswer, apiErrorText: apiError ? turnAnswer : undefined, settings });
   if (!pings.length) {
     console.log(`quiet · main · ${where} · done (not a chat answer or relay)`);

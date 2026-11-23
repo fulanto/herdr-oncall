@@ -19,6 +19,8 @@ import {
   nextDialog,
   openPanelFor,
   optionKeyboard,
+  ownedElsewhere,
+  paneStatePath,
   pendingPair,
   readPaneScreen,
   roleSettings,
@@ -79,7 +81,7 @@ export function classifyDelivery(liveStatus, text) {
 }
 
 function outboundPath() {
-  return join(stateDir(), "outbound.json");
+  return paneStatePath("outbound.json");
 }
 
 function offsetPath() {
@@ -109,8 +111,26 @@ export function pruneOutbound(store, now = Date.now()) {
   return next;
 }
 
+// A ping is written down after it was sent, and sending waits on the network:
+// a hook checked that its session owns Oncall, and `poll` in another session
+// can have moved it since. The record would then go into the new owner's
+// state, where the same pane id is another pane, and a reply to a done ping
+// (which is checked against no dialog) would be typed into it. So it is asked
+// once more here, and said when the answer is no. The ping itself is out; it
+// just cannot be answered from the chat.
+function movedAway(record) {
+  if (!ownedElsewhere()) {
+    return false;
+  }
+  console.log(`not recorded · ${record.where || record.paneId} · oncall moved to another herdr session while this ping was on its way`);
+  return true;
+}
+
 export function rememberOutbound(record, now = Date.now()) {
   if (!record?.messageId || !record?.paneId) {
+    return;
+  }
+  if (movedAway(record)) {
     return;
   }
   const path = outboundPath();

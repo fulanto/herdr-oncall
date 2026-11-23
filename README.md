@@ -42,7 +42,7 @@ The interesting part isn't the notification — it's not sending one.
 herdr plugin install fulanto/herdr-oncall --ref stable --yes
 ```
 
-That compiles the desktop panel and starts the reply poller — no Herdr restart needed. `--ref stable` follows releases: Oncall updates itself from there (see [Updates](#updates)).
+That compiles the desktop panel — no Herdr restart needed. The reply poller starts with the first thing Oncall does in a Herdr session (an agent changing status there, an action you invoke), and that session becomes the one Oncall belongs to (see [More than one Herdr session](#more-than-one-herdr-session)). `--ref stable` follows releases: Oncall updates itself from there (see [Updates](#updates)).
 
 On a Mac that is all the setup there is: blocked and done open the panel straight away, with no phone channel configured. Check it:
 
@@ -129,6 +129,8 @@ Every blocked or done event leaves a line in `herdr plugin log list --plugin com
 | `debounced · <where> · …` | the same pane and status within `DEBOUNCE_MS` |
 | `not sent · <where> · already pinged for this call` | Herdr reported the same dialog (the same tool call, still unanswered) again, and its card can still be tapped |
 | `off · …` / `ignored · … · not in NOTIFY_ON=…` | Oncall is toggled off, or `NOTIFY_ON` leaves the status out |
+| `not sent · blocked · <pane> · this herdr session (…) does not own Oncall, … does; …` | the event came from a Herdr session Oncall does not belong to (see [More than one Herdr session](#more-than-one-herdr-session)) |
+| `poller started · pid … · herdr <socket> · …` | the poller was not running, or was not bound to this session's Herdr, and has been started again |
 | `quiet · worker · <name> · <where> · done (supervised)` | with drover: an orchestrator's or a worker's turn ended; the layer above relays it |
 | `escalation armed · worker · <name> · <where> · pings after 600s if nobody answers` | with drover: a dialog the layer above should answer; the poller pings if it is still there then |
 | `quiet · main · <where> · done (not a chat answer or relay)` | with drover and `MAIN_DONE_PING=relay`: the main session's turn was neither |
@@ -137,6 +139,24 @@ Every blocked or done event leaves a line in `herdr plugin log list --plugin com
 With drover, the poller's own log (`poller.log` in the state dir) carries what happens to those dialogs afterwards (`escalated · …`, `escalation cleared · … · dialog gone`, `escalation reset · … · a different dialog is up`) and every chat message for the main session (`main inbox · delivered|stashed|refused · <length> chars · …`, never the text).
 
 No line at all for a blocked prompt means Herdr never reported the pane as blocked. Check `herdr pane list` while the prompt is up.
+
+### More than one Herdr session
+
+Herdr can run several servers at once (`herdr --session <name>`), and it runs every plugin in each of them: Oncall's startup hook when a server starts, its event hook for that server's panes, any action you invoke there. A machine still has one Oncall: one bot, one poller, one state directory. A pane id only means something inside the server it came from (every server has a `w1:p1`), so Oncall belongs to **one Herdr session at a time**, and everything it does is for that session.
+
+- **Who owns it.** With no owner on record, the first session that runs anything of Oncall's claims it: a server starting, an agent changing status, an action. An install's build step is not one of those (Herdr runs it outside any session), so a fresh install is claimed by the session where Oncall first does something. With one Herdr session on the machine, that is all there is to it. After an upgrade from a version that kept no owner, it is the first session to run the new code; when the update came in by itself, that is the session the poller was already serving. The owner is kept in `owner.json` in the state dir, by the session's API socket path.
+- **What the owner gets.** The poller talks to the owner's Herdr and no other. Its pings, panels, replies and escalations are for the owner's panes.
+- **What every other session gets: nothing.** A server starting in another session does not restart the poller. Its panes are not pinged and no panel opens for them. `toggle`, `enable`, `disable`, `test`, `pair`, `pair-feishu` and `unpair-feishu` are refused there (exit 1) and say where Oncall belongs. `status` answers anywhere. `setup` still links the plugin and seeds the config, and leaves the poller alone.
+- **Nothing is taken over.** If the owner's server is not running, Oncall waits for it. Another session that happens to be up does not inherit your phone. A Feishu message sent meanwhile is answered `没送进去：herdr 连不上（<socket>）…`, which names the socket Oncall is waiting for.
+- **Moving it.** Run the `poll` action ("Restart reply poller") in the session that should have it:
+
+  ```sh
+  herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
+  ```
+
+  That session becomes the owner and the poller restarts on its Herdr: the old session's poller is stopped first, and `poll` exits 1 with `poll failed · …` rather than report a poller that is not its own. What the old session knew about its panes (pings that could be replied to, armed escalations, open panels) is dropped, because those pane ids are other panes here; the count goes to the log as `oncall moved · <old> → <new> · …`. Messages still queued for drover's main session are kept and go to the main session of the new owner. Running `poll` where Oncall already is only restarts the poller.
+
+A poller that is not on the owner's Herdr is replaced by the next event in the owner's session, with a `poller started · …` line saying what it found. There is one poller at a time: each one checks every few seconds that it is still the one on record for the owner's session, and stops itself otherwise (`oncall poller stopping pid=… · …` in `poller.log`). `status` shows all of it: `session` (the Herdr the call ran in), `owner` (`socket_path`, whether a server is `running` there, `current_session`), and `poller` (`socket_path`, `bound_to_owner`, `current_session`).
 
 ### Requirements
 
@@ -150,6 +170,14 @@ Your `.env` survives reinstalls.
 ### Updates
 
 Releases install themselves. Every few hours, and whenever Herdr starts, Oncall asks Herdr to update it from the `stable` branch, which moves only when a new version is released. Herdr checks out and builds the new version beside the old one, and Oncall tells your paired chat `oncall updated · v… → v…`. A copy installed without `--ref stable` is moved onto it the first time. A checkout linked with `install.sh` is never touched. `AUTO_UPDATE=0` turns it off; `herdr plugin update com.codreamer.herdr.oncall --yes` updates by hand.
+
+The first version that knows which Herdr session Oncall belongs to (see [More than one Herdr session](#more-than-one-herdr-session)) has no owner on record when it arrives. An update that came in by itself gives Oncall to the session the poller was already serving, since the poller is what restarts it. If you run more than one Herdr session, settle it yourself once after upgrading: run Restart reply poller in the session you use,
+
+```sh
+herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall
+```
+
+and Oncall stays there until you run it somewhere else.
 
 Releasing is bumping `version` in `herdr-plugin.toml` and pushing to `main`: once the tests pass, CI publishes the release, titled and described by that commit's message, and moves `stable` to it.
 
@@ -183,19 +211,21 @@ Everything else is quiet (`quiet · main · … · done (not a chat answer or re
 - Codex is in the middle of a turn: a message would cut that turn short, so it waits until Codex stops (Claude Code queues it itself and takes it next);
 - the main session has no name for a moment (it is restarting): up to 30 seconds, then `没找到主会话…`.
 
+One case does not wait: Herdr itself cannot be reached (no server is listening on its socket, or the `herdr` command cannot be run). The message is turned away at once, even if others are already waiting, with `没送进去：herdr 连不上（<socket>）：<why>…`, which names the socket of the Herdr Oncall belongs to and says how to move Oncall to the one you are using (see [More than one Herdr session](#more-than-one-herdr-session)). A message that was already waiting when Herdr went away is kept, and goes in when Herdr is back. A Herdr that is there but fails to answer (in the middle of a restart, say) is treated like a main session with no name: the message waits its 30 seconds.
+
 A message still waiting after 30 minutes is mentioned once and kept. A dialog the main session raises while one of your chat messages still waits for its answer is pinged at once, without the panel's wait.
 
 Commands, handled by Oncall and never typed into a pane: `/help`, `/off` and `/on` (the same switch as the `toggle` action; while off, nothing from the chat reaches a pane, buttons included), and `/send`. `/off` only stops Oncall from bothering you; it does not protect anything, since whoever can send `/off` can send `/on`. **Anyone who gets into the paired Feishu account can drive the main session like you can**, including pushing code: there is no extra confirmation for what comes from the chat. Unpair (`unpair-feishu`) if the account is lost.
 
 Not covered: while a main session waits for a background subagent, Herdr reports the subagent's dialog as `working`, so no blocked event arrives for it (drover's own watcher reads the screen for that case).
 
-drover reads Oncall's state with the `status` action's script, which prints one line of JSON (version, switch, channels paired or not, poller, panel, the effective role settings, whether the main session is registered) and never a secret:
+drover reads Oncall's state with the `status` action's script, which prints one line of JSON (version, switch, channels paired or not, which Herdr session owns Oncall and whether the poller is bound to it, panel, the effective role settings, whether the main session is registered or Herdr did not answer) and never a secret:
 
 ```sh
 /bin/bash <plugin_root>/bin/run-node.sh src/actions/status.mjs
 ```
 
-drover's task board sends what you click there (`全部收尾：…`) to the main session with `src/actions/send-main.mjs --source board --text "<text>"`: it goes in as `[看板] <text>` by the same rules as a chat message (it waits for a dialog, a draft or a busy Codex), prints one line of JSON for the board, gets no reply on Feishu, and is not held by `/off`.
+drover's task board sends what you click there (`全部收尾：…`) to the main session with `src/actions/send-main.mjs --source board --text "<text>"`: it goes in as `[看板] <text>` by the same rules as a chat message (it waits for a dialog, a draft or a busy Codex), prints one line of JSON for the board, gets no reply on Feishu, and is not held by `/off`. Run from a Herdr session that does not own Oncall, or while Herdr cannot be reached, it sends nothing and prints `{"ok":false,"error":…}`.
 
 ## Config
 

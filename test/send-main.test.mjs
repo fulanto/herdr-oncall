@@ -1,24 +1,27 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const NO_NETWORK = join(ROOT, "test", "helpers", "no-network.mjs");
 
 // The script as drover runs it, `run-node.sh src/actions/send-main.mjs …` from
 // the plugin root, against a herdr stand-in that records every call. The poller
-// is "running" (its pid file names this test process), so a queued click
-// starts no real one.
+// is "running" (its pid file names this test process, bound to the herdr the
+// script runs in), so a queued click starts no real one.
 function sandbox({ status = "idle", drover = true } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "oncall-send-main-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "oncall-send-main-")));
   const config = join(dir, "config");
   const state = join(dir, "state");
+  const socket = join(dir, "herdr.sock");
   mkdirSync(config, { recursive: true });
   mkdirSync(state, { recursive: true });
   writeFileSync(join(state, "poller.pid"), `${process.pid}\n`);
+  writeFileSync(join(state, "poller.json"), JSON.stringify({ pid: process.pid, socket }));
   if (drover) {
     writeFileSync(join(config, "drover.env"), ["MAIN_AGENT_NAME=drover", "BARE_MESSAGE_TARGET=main"].join("\n"));
   }
@@ -55,6 +58,11 @@ function sandbox({ status = "idle", drover = true } = {}) {
         HERDR_PLUGIN_CONFIG_DIR: config,
         HERDR_PLUGIN_STATE_DIR: state,
         HERDR_BIN_PATH: herdr,
+        // Nothing this script starts can reach a network: should it ever start
+        // a real poller (the sandbox's pid and binding are there so that it
+        // does not), that poller could not reach Feishu or Telegram either.
+        NODE_OPTIONS: `--import "${NO_NETWORK}"`,
+        HERDR_SOCKET_PATH: socket,
         // An empty value beats a developer's own .env in the plugin root.
         ...(drover ? {} : { MAIN_AGENT_NAME: "" }),
       },

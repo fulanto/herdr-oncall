@@ -16,6 +16,9 @@ import { appendPollerLog, ensurePoller } from "../inbound/poller.mjs";
 // stdout is exactly one line of JSON (see sendFromBoard); exit 0 when the text
 // was delivered or queued, 1 otherwise, still with one line of JSON. The log
 // lines go to poller.log, never to stdout and never with the text.
+//
+// Run in a herdr session that does not own Oncall, it types nothing and queues
+// nothing: `{"ok":false,"error":…}`, exit 1 (sendFromBoard).
 
 function parseArgs(argv) {
   const args = {};
@@ -54,7 +57,7 @@ if (result.result === "queued") {
   // Only the poller sends what waits in the inbox. One that is not running
   // would leave the click there until the next notify event starts it.
   try {
-    ensurePoller();
+    ensurePoller({ log: appendPollerLog });
   } catch (error) {
     appendPollerLog(`send-main · could not start the poller: ${error?.message || error}`);
   }
