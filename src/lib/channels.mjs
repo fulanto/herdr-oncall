@@ -8,6 +8,10 @@ import { sendTelegram } from "./telegram.mjs";
 // on the one you happen to have open always works.
 export const CHANNELS = ["telegram", "feishu"];
 
+// How long a ping stays on record, which is how long a reply or a tap can
+// still be told which ping it is about.
+export const PING_TTL_MS = 24 * 60 * 60 * 1000;
+
 export function channelList(raw = process.env.CHANNEL) {
   const list = String(raw ?? "")
     .split(",")

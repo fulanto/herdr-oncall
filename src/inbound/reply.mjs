@@ -14,6 +14,8 @@ import {
   envFlag,
   extractStartPayload,
   fetchedImages,
+  isTestPing,
+  lastTestPingAt,
   mainBlockedText,
   modeEnabled,
   nextDialog,
@@ -22,6 +24,7 @@ import {
   ownedElsewhere,
   paneStatePath,
   pendingPair,
+  PING_TTL_MS,
   readPaneScreen,
   roleSettings,
   rolesActive,
@@ -43,7 +46,6 @@ import {
 import { describeError } from "./poller.mjs";
 import { OFF_NOTICE, routeChatMessage } from "./main-inbox.mjs";
 
-const OUTBOUND_TTL_MS = 24 * 60 * 60 * 1000;
 const NAMED_KEYS = {
   enter: "enter",
   esc: "esc",
@@ -106,7 +108,7 @@ function writeJson(path, value) {
 export function pruneOutbound(store, now = Date.now()) {
   const next = {};
   for (const [id, record] of Object.entries(store || {})) {
-    if (record?.paneId && Number(record.at) && now - Number(record.at) < OUTBOUND_TTL_MS) {
+    if (record?.paneId && Number(record.at) && now - Number(record.at) < PING_TTL_MS) {
       next[id] = record;
     }
   }
@@ -251,6 +253,41 @@ export function replyTarget(quotedId, now = Date.now()) {
 // was sent for; a bare message must not be refused because that dialog is gone.
 export function replyFingerprint(target) {
   return target?.explicit ? target.fingerprint : undefined;
+}
+
+// Whether a chat message is about a test ping (lib/test-ping.mjs), which is a
+// ping about no pane: such a message reaches no pane and is told so, before
+// any target is looked for. Returns which way it is about one, or undefined:
+//   "quoted"  a reply that quotes a test ping.
+//   "latest"  a message that names no ping on record, where such a message
+//             goes to the pane of the latest ping (`toLatest`: everywhere but
+//             with drover's BARE_MESSAGE_TARGET=main, where it goes to the
+//             main session whatever was pinged), while the latest ping is a
+//             test ping. "收到" typed under a test ping in Feishu quotes
+//             nothing, and went into the pane of the real ping before it.
+// The two are told apart because each is answered in its own words: the
+// second one's sender quoted nothing, maybe hours after the test, and "this is
+// a test ping" would not say what is in the way.
+export function aboutTestPing(quotedId, { toLatest = true, now = Date.now() } = {}) {
+  if (isTestPing(quotedId, now)) {
+    return "quoted";
+  }
+  const latest = toLatest && !lookupOutbound(quotedId, now) && lastTestPingAt(now) > Number(lastOutbound(now)?.at ?? 0);
+  return latest ? "latest" : undefined;
+}
+
+// What a message about a test ping is told, by the way it is about one.
+export const TEST_PING_REPLY = {
+  quoted: "This is a test ping, so nothing was sent to any pane. To answer an agent, reply to a real ping.",
+  latest: "The latest ping is a test ping, so nothing was sent to any pane. To answer an agent, reply to a real ping.",
+};
+
+// The answer to a message about a test ping, in the words of the chat it is in
+// (`text`). Nothing else happens to the message.
+export async function answerTestPing(channel, text, log = console.log) {
+  log(`not sent · ${channel.name} · the message is about a test ping, which belongs to no pane`);
+  await channel.reply(text);
+  return { skipped: "test-ping" };
 }
 
 export function readOffset() {
@@ -493,6 +530,10 @@ export async function handleTelegramUpdate(update, deps = {}) {
       await channel.reply(REPLY_HELP);
     }
     return { skipped: "command" };
+  }
+  const testPing = aboutTestPing(message.reply_to_message?.message_id);
+  if (testPing) {
+    return answerTestPing(channel, TEST_PING_REPLY[testPing]);
   }
   const target = resolveReplyTarget(message);
   if (!target?.paneId) {

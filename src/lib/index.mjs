@@ -12,6 +12,7 @@ export * from "./feishu-pairing.mjs";
 export * from "./feishu-ws.mjs";
 export * from "./chat-images.mjs";
 export * from "./channels.mjs";
+export * from "./test-ping.mjs";
 export * from "./pair.mjs";
 export * from "./transcript.mjs";
 export * from "./update.mjs";

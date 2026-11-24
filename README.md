@@ -97,7 +97,7 @@ With drover, a paired Telegram chat works like the Feishu chat described in [Wit
 
 Run `test` again (the command under [Install](#install)). It sends a test ping to every paired channel in `CHANNEL` and logs `sent test ping · <channel>`. The ping arriving is the check.
 
-The test ping belongs to no pane, so do not answer it: a reply goes to the pane of your latest real ping, or is answered `Reply to a ping so I know which pane.` when there is none. To try replies, answer a real blocked or done ping.
+The test ping belongs to no pane, so an answer to it reaches none. A reply that quotes it is answered `This is a test ping, so nothing was sent to any pane. To answer an agent, reply to a real ping.` A plain message is answered `The latest ping is a test ping, so nothing was sent to any pane. To answer an agent, reply to a real ping.` for as long as the test ping is your latest ping (24 hours at most); after the next real ping, plain messages go to that ping's pane again. With drover the two answers read `这是测试通知，这条没有送进任何 pane。要回答 agent，请引用真实的通知回复` and `最近一条通知是测试通知，这条没有送进任何 pane。要回答 agent，请引用真实的通知回复`, and while the chat is a line to the main session (`BARE_MESSAGE_TARGET=main`) a plain message still goes there. To try replies, answer a real blocked or done ping.
 
 If Oncall is toggled off, `test` still sends its ping, and says first `oncall: off, blocked and done send nothing until it is turned back on: …`.
 
@@ -132,6 +132,8 @@ A blocked ping carries the dialog and one button per option: a card in Feishu, a
 | tap a button | the dialog that ping was about |
 | reply to a ping (quote it) | that ping's pane |
 | send a plain message | the pane of your latest ping (with drover: the main session) |
+
+A test ping is a ping too, one with no pane. A reply to it reaches no pane, and while it is your latest ping neither does a plain message that would have gone to the pane of your latest ping (see [Check a channel](#check-a-channel)).
 
 What your text does depends on the pane at that moment. If a dialog is waiting, the text answers it: a single letter or digit, or a key name (`esc`, `enter`, `tab`, `space`, `up`, `down`, `left`, `right`), is pressed as that key, and anything else is typed in and submitted. Otherwise the text goes in as a new prompt.
 

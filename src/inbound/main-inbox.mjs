@@ -35,6 +35,8 @@ import {
 } from "../lib/index.mjs";
 import {
   NO_TARGET,
+  aboutTestPing,
+  answerTestPing,
   finishDelivery,
   herdrErrorText,
   herdrFailed,
@@ -77,6 +79,12 @@ const PENDING_TTL_MS = 6 * 60 * 60_000;
 export const INBOX_CHECK_MS = 5000;
 
 export const OFF_NOTICE = "oncall 已关闭，发 /on 打开";
+// What a message about a test ping is told, by the way it is about one (see
+// aboutTestPing in reply.mjs).
+export const TEST_PING_NOTICE = {
+  quoted: "这是测试通知，这条没有送进任何 pane。要回答 agent，请引用真实的通知回复",
+  latest: "最近一条通知是测试通知，这条没有送进任何 pane。要回答 agent，请引用真实的通知回复",
+};
 
 export function helpText(settings = roleSettings()) {
   const bare = bareToMain(settings)
@@ -933,6 +941,11 @@ export async function routeChatMessage(
     log(`chat · refused · oncall is off · ${channel.name}`);
     await channel.reply(OFF_NOTICE);
     return { skipped: "off" };
+  }
+  // Asked before the images are fetched: this message goes nowhere.
+  const testPing = aboutTestPing(quotedId, { toLatest: !bareToMain(settings), now });
+  if (testPing) {
+    return answerTestPing(channel, TEST_PING_NOTICE[testPing], log);
   }
   const ready = await readyChatParts(parts, { fetchImages, channel });
   if (!ready) {

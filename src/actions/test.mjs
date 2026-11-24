@@ -11,7 +11,7 @@ import {
   remoteChannels,
   rolesActive,
   seedConfigEnv,
-  sendRemote,
+  sendTestPings,
   setupHints,
   showPanel,
 } from "../lib/index.mjs";
@@ -44,16 +44,7 @@ const text = formatMessage(
   "blocked",
 );
 
-let failed = 0;
-for (const channel of channels) {
-  try {
-    await sendRemote(channel, `test ping\n\n${text}`, { status: "test" });
-    console.log(`sent test ping · ${channel}`);
-  } catch (error) {
-    failed++;
-    console.error(`${channel} test ping failed: ${error?.message || error}`);
-  }
-}
+const failed = await sendTestPings(channels, `test ping\n\n${text}`);
 process.exit(failed ? 1 : 0);
 
 // The phone channels are optional and the panel needs no setup, so with none

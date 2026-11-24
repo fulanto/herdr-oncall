@@ -12,7 +12,17 @@ import {
 } from "../lib/index.mjs";
 import { describeError } from "./poller.mjs";
 import { OFF_NOTICE, isChatCommand, routeChatMessage } from "./main-inbox.mjs";
-import { NO_TARGET, REPLY_HELP, finishDelivery, lookupOutbound, readyChatParts, replyTarget } from "./reply.mjs";
+import {
+  NO_TARGET,
+  REPLY_HELP,
+  TEST_PING_REPLY,
+  aboutTestPing,
+  answerTestPing,
+  finishDelivery,
+  lookupOutbound,
+  readyChatParts,
+  replyTarget,
+} from "./reply.mjs";
 
 export function feishuChannel(creds, openId, deps = {}) {
   const send = deps.send ?? sendFeishu;
@@ -315,7 +325,12 @@ function onMessage(event, deps) {
   }
   // Quoting a ping ("reply" in Feishu) names it; a bare message goes to the
   // pane the last ping was about.
-  const target = replyTarget(message.parent_id || message.root_id);
+  const quotedId = message.parent_id || message.root_id;
+  const testPing = aboutTestPing(quotedId);
+  if (testPing) {
+    return { work: () => answerTestPing(channel, TEST_PING_REPLY[testPing]) };
+  }
+  const target = replyTarget(quotedId);
   if (!target?.paneId) {
     return {
       work: async () => {
