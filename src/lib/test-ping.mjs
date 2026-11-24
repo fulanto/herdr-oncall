@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomic } from "./atomic.mjs";
 import { PING_TTL_MS, sendRemote } from "./channels.mjs";
 import { stateDir } from "./paths.mjs";
 
@@ -33,13 +34,8 @@ export function rememberTestPing(messageId, now = Date.now()) {
   if (messageId === undefined || messageId === null) {
     return;
   }
-  const store = { ...liveTestPings(now), [String(messageId)]: now };
-  const path = testPingsPath();
-  mkdirSync(stateDir(), { recursive: true });
   // The poller reads this while the action writes it: whole or not at all.
-  const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, JSON.stringify(store), "utf8");
-  renameSync(temp, path);
+  writeFileAtomic(testPingsPath(), JSON.stringify({ ...liveTestPings(now), [String(messageId)]: now }));
 }
 
 export function isTestPing(messageId, now = Date.now()) {
