@@ -88,19 +88,43 @@ test("a reply Feishu refuses goes out as an ordinary message", async () => {
   }
 });
 
-test("a Telegram reply names the message it answers", async () => {
+// A stand-in for the Telegram Bot API that keeps the last message sent to it.
+async function withTelegram(body) {
   const previousFetch = globalThis.fetch;
-  let payload;
+  const sent = {};
   globalThis.fetch = async (_url, init) => {
-    payload = JSON.parse(init.body);
+    sent.payload = JSON.parse(init.body);
     return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, result: { message_id: 77 } }) };
   };
   try {
-    assert.equal(await sendTelegram("t", "9", "已完成", { forceReply: false, replyTo: "56" }), 77);
-    assert.deepEqual(payload.reply_parameters, { message_id: 56, allow_sending_without_reply: true });
-    await sendTelegram("t", "9", "已完成", { forceReply: false });
-    assert.equal(payload.reply_parameters, undefined);
+    await body(sent);
   } finally {
     globalThis.fetch = previousFetch;
   }
-});
+}
+
+test("a Telegram reply names the message it answers", () =>
+  withTelegram(async (sent) => {
+    assert.equal(await sendTelegram("t", "9", "已完成", { forceReply: false, replyTo: "56" }), 77);
+    assert.deepEqual(sent.payload.reply_parameters, { message_id: 56, allow_sending_without_reply: true });
+    await sendTelegram("t", "9", "已完成", { forceReply: false });
+    assert.equal(sent.payload.reply_parameters, undefined);
+  }));
+
+// What sits under a Telegram message is its sender's to say, each time: the
+// choices as buttons, a reply box for a ping that is answered by typing, or
+// nothing (an ack). No setting stands behind it. There was one, read only when
+// a sender did not say, and every sender does, so changing it did nothing.
+test("a Telegram message carries a reply box only when its sender asks for one", () =>
+  withTelegram(async (sent) => {
+    await sendTelegram("t", "9", "done · Claude", { forceReply: true });
+    assert.deepEqual(sent.payload.reply_markup, { force_reply: true, selective: true });
+    await sendTelegram("t", "9", "sent", { forceReply: false });
+    assert.equal(sent.payload.reply_markup, undefined);
+    await sendTelegram("t", "9", "sent");
+    assert.equal(sent.payload.reply_markup, undefined);
+    // Buttons take the place of the reply box.
+    const keyboard = { inline_keyboard: [[{ text: "1. Yes", callback_data: "1" }]] };
+    await sendTelegram("t", "9", "blocked · Claude", { forceReply: true, replyMarkup: keyboard });
+    assert.deepEqual(sent.payload.reply_markup, keyboard);
+  }));

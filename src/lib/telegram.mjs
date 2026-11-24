@@ -1,5 +1,3 @@
-import { envFlag } from "./config.mjs";
-
 const TELEGRAM_API = "https://api.telegram.org";
 
 // One door for every Telegram call, so the timeout and the tolerant body parse
@@ -40,16 +38,18 @@ export async function telegramGetMe(token) {
   return json.result;
 }
 
+// What sits under the message is the caller's to say: `replyMarkup` (a ping's
+// choices as buttons), else a reply box when `forceReply` is set (a ping that
+// is answered by typing), else nothing (an ack).
 export async function sendTelegram(token, chatId, text, options = {}) {
   const payload = {
     chat_id: chatId,
     text,
     disable_web_page_preview: true,
   };
-  const forceReply = options.forceReply ?? envFlag("TELEGRAM_FORCE_REPLY", true);
   if (options.replyMarkup) {
     payload.reply_markup = options.replyMarkup;
-  } else if (forceReply) {
+  } else if (options.forceReply) {
     payload.reply_markup = { force_reply: true, selective: true };
   }
   if (options.replyTo !== undefined && options.replyTo !== null) {
