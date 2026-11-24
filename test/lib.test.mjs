@@ -59,13 +59,13 @@ test("formatMessage names workspace, pane, and status without emoji", () => {
       workspace_label: "simple",
       workspace_id: "w8",
       focused_pane_agent: "codex",
-      worktree: { repo_name: "asr-service" },
+      worktree: { repo_name: "api-service" },
     },
     { data: { pane_id: "w8:p1", agent_status: "done", display_agent: "codex" } },
     "done",
   );
   assert.match(done, /^done · Codex/m);
-  assert.match(done, /asr-service · simple · pane 1/);
+  assert.match(done, /api-service · simple · pane 1/);
   assert.doesNotMatch(done, /w8:p1/);
   assert.match(done, /finished/);
 });
@@ -75,7 +75,7 @@ test("formatMessage done includes the last assistant turn", () => {
     {
       workspace_label: "simple",
       focused_pane_agent: "codex",
-      worktree: { repo_name: "asr-service" },
+      worktree: { repo_name: "api-service" },
     },
     { data: { pane_id: "w8:p1", agent_status: "done", display_agent: "codex" } },
     "done",
@@ -121,7 +121,7 @@ test("a done ping carries the answer, not the footer under the prompt box", () =
       rule,
       box,
       rule,
-      "  ➜ his-claw-agent git:(Copilot5) ctx:52% Fable 5.1",
+      "  ➜ billing-worker git:(develop5) ctx:52% Fable 5.1",
       "  ⏵⏵ accept edits on · 1 monitor · ← 1 agent",
     ].join("\n");
 
@@ -496,10 +496,10 @@ test("an idle screen with a labelled separator has no live dialog", () => {
   const screen = [
     "⏺ 说明文字。",
     "✻ Baked for 5m · done 3:23 PM",
-    "─────────────────────────────── ↯  change-default-asr-provider ─",
+    "─────────────────────────────── ↯  change-default-api-provider ─",
     "❯ 把注释补上",
     "─────────────────────────────────────────────────────────────────",
-    "  ➜ asr-service git:(feature) ✗ ctx:20% Opus 5",
+    "  ➜ api-service git:(feature) ✗ ctx:20% Opus 5",
   ].join("\n");
   assert.equal(screenHasLiveDialog(screen), false);
 });
@@ -680,7 +680,7 @@ test("options come only from the dialog, not from earlier numbered chat lines", 
 ⏺ Bash command · from the general-purpose agent
   Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
 
-    cd /Users/me/Git-Repo/trizen-doctor && node -e '
+    cd /Users/me/projects/sample-portal && node -e '
     const fs=require("fs");
     const L=["zh","en","ja","de","ar","ko"];
     '
@@ -713,7 +713,7 @@ test("options come only from the dialog, not from earlier numbered chat lines", 
 
   const body = blockedSnippet(screen);
   assert.match(body, /^⏺ Bash command/m);
-  assert.match(body, /cd \/Users\/me\/Git-Repo\/trizen-doctor/);
+  assert.match(body, /cd \/Users\/me\/projects\/sample-portal/);
   assert.match(body, /This command requires approval/);
   assert.match(body, /4\. No/);
   assert.doesNotMatch(body, /毫秒时间戳/);
@@ -825,13 +825,13 @@ test("an option's shortcut wrapped onto its own line is not a footer", () => {
     "",
     "  Do you want to make this edit to supabase-dump.sh?",
     "  ❯ 1. Yes",
-    "    2. Yes, and always allow access to /Users/fangtao/.local/bin for this session",
+    "    2. Yes, and always allow access to /Users/someone/.local/bin for this session",
     "       (shift+tab)",
     "    3. No",
     "",
     "  Esc to cancel · Tab to amend",
     "──────────────────────────────────────────────────── ↯ ─",
-    "  ➜ trizen-doctor git:(main) ✗ ctx:42% Opus 5",
+    "  ➜ sample-portal git:(main) ✗ ctx:42% Opus 5",
   ].join("\n");
   assert.equal(screenHasLiveDialog(screen), true);
   // The tail is joined back onto the label it was wrapped off, so the button
@@ -841,7 +841,7 @@ test("an option's shortcut wrapped onto its own line is not a footer", () => {
     {
       key: "2",
       send: "2",
-      label: "Yes, and always allow access to /Users/fangtao/.local/bin for this session (shift+tab)",
+      label: "Yes, and always allow access to /Users/someone/.local/bin for this session (shift+tab)",
     },
     { key: "3", send: "3", label: "No" },
   ]);
@@ -895,10 +895,10 @@ test("a wrapped option is read exactly like the same option unwrapped", () => {
 const SHIFT_TAB_WITH_A_WORD = [
   "  44      private ProxySignatureVerifier signatureVerifier;",
   "╌".repeat(147),
-  " Do you want to make this edit to TokenAuthFilterAsrAuthTest.java?",
+  " Do you want to make this edit to TokenAuthFilterApiAuthTest.java?",
   " ❯ 1. Yes",
   "   2. Yes, and always allow access to",
-  "      /Users/fangtao/Git-Repo/trizen/his-claw-gateway/.worktrees/asr-ws-access-token/src/test/java/com/trizen/gateway/infra/security for this",
+  "      /Users/someone/projects/sample/payments-gateway/.worktrees/add-ws-access-token/src/test/java/com/sample/gateway/infra/security for this",
   "      session (shift+tab)",
   "   3. No",
   "",
@@ -914,8 +914,8 @@ test("a shortcut wrapped down with a word before it is still the option's tail",
   );
   // The path is the label, all of it on the line it wrapped onto; the panel and
   // Telegram cut it to their own widths.
-  assert.match(options[1].label, /^Yes, and always allow access to \/Users\/fangtao\/Git-Repo\//);
-  assert.match(blockedSnippet(SHIFT_TAB_WITH_A_WORD), /^Do you want to make this edit to TokenAuthFilterAsrAuthTest\.java\?/);
+  assert.match(options[1].label, /^Yes, and always allow access to \/Users\/someone\/projects\//);
+  assert.match(blockedSnippet(SHIFT_TAB_WITH_A_WORD), /^Do you want to make this edit to TokenAuthFilterApiAuthTest\.java\?/);
   assert.equal(screenHasOpenMenu(SHIFT_TAB_WITH_A_WORD), true);
 });
 
@@ -1169,8 +1169,8 @@ test("agentDetectionSkipped reads the hook-owned flag from either herdr shape", 
 const TODO_PANEL_DIALOG = `
 ⏺ Listing 2 directories, running 5 shell commands…
   ⎿  $ export PATH="$(dirname "$(which node)"):$PATH";
-     OPENCLAW_DECK_RENDERER_NODE_PATH=/tmp/deck-renderer-node/node_modules
-     OPENCLAW_DATABASE_URL="sqlite+aiosqlite:///:memory:" ./.venv/bin/python -m pytest
+     DEMOTOOL_PAGE_RENDERER_NODE_PATH=/tmp/page-renderer-node/node_modules
+     DEMOTOOL_DATABASE_URL="sqlite+aiosqlite:///:memory:" ./.venv/bin/python -m pytest
      tests/ -q 2>&1 | tail -6
 
 ──────────────────────────────────────────────────────────────────────────────────────────
@@ -1178,8 +1178,8 @@ const TODO_PANEL_DIALOG = `
  Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
 
    │ export PATH="$(dirname "$(which node)"):$PATH";
-   │ OPENCLAW_DECK_RENDERER_NODE_PATH=/tmp/deck-renderer-node/node_modules
-   │ OPENCLAW_DATABASE_URL="sqlite+aiosqlite:///:memory:" ./.venv/bin/python -m pytest
+   │ DEMOTOOL_PAGE_RENDERER_NODE_PATH=/tmp/page-renderer-node/node_modules
+   │ DEMOTOOL_DATABASE_URL="sqlite+aiosqlite:///:memory:" ./.venv/bin/python -m pytest
    │ tests/ -q 2>&1 | tail -6
    Run tests/ with real node_modules
 
@@ -1193,8 +1193,8 @@ const TODO_PANEL_DIALOG = `
  Esc to cancel · Tab to amend
 
   4 tasks (3 done, 1 in progress, 0 open)
-  ✔ 拆出 DeckSpecAuthor 独立写稿调用
-  ✔ build_slides_deck 改收 brief，修复轮移进工具内部
+  ✔ 拆出 PageSpecAuthor 独立写稿调用
+  ✔ build_slides_page 改收 brief，修复轮移进工具内部
   ✔ 回退主 agent 的 effort/预算与契约注入
   ◼ 回归测试 + 重新实测端到端`;
 
@@ -1224,16 +1224,16 @@ test("a task list under the prompt box does not hide the dialog above it", () =>
 // divider) and the question ends in a fullwidth `？`. Together they left one
 // useless button, "Chat about this", and a snippet with no question in it.
 const TABBED_FORM = `⏺ 探索完毕。当前 /ws/v2/simple_transcribe 走的是 resolveProviderStrict(language, diarization)，只按「语言候选 +
-  asr.default-provider」选供应商，完全没有医院维度。有几个语义决策需要你确认：
+  api.default-provider」选供应商，完全没有客户维度。有几个语义决策需要你确认：
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ←  ☒ 参数名  ☒ 优先级  ☐ 私有化供应商  ☐ 透传范围  ✔ Submit  →
 
-│ 医院配置为私有化供应商 70000201_asr（不在任何语言的 providers 列表里）时如何处理？
+│ 客户配置为私有化供应商 10000001_api（不在任何语言的 providers 列表里）时如何处理？
 
 ❯ 1. 直接透传，跳过语言路由（推荐）
-     与现有 resolveProvider 的私有化白名单行为一致，院内数据不会被路由到公有云供应商；若该语言/话者分离不支持，由识别器自身报错
+     与现有 resolveProvider 的私有化白名单行为一致，内部数据不会被路由到公有云供应商；若该语言/话者分离不支持，由识别器自身报错
   2. 按普通供应商处理
-     不在语言候选内就回退到公有云供应商（tencent/xunfei），语言能力校验更严格，但院内医院的音频会出院
+     不在语言候选内就回退到公有云供应商（tencent/xunfei），语言能力校验更严格，但内部客户的音频会外流
   3. Type something.
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   4. Chat about this
@@ -1249,7 +1249,7 @@ test("a rule inside the choice list does not cut the run short", () => {
 
 test("a question ending in a fullwidth mark is still the question", () => {
   const snippet = blockedSnippet(TABBED_FORM);
-  assert.match(snippet, /医院配置为私有化供应商.*时如何处理？/);
+  assert.match(snippet, /客户配置为私有化供应商.*时如何处理？/);
   // The tab bar rides along, and it is the only thing on screen that says which
   // of the four questions this is.
   assert.match(snippet, /☒ 参数名/);
@@ -1293,16 +1293,16 @@ test("a fullwidth question anchors the block the way an ASCII one does", () => {
 // any short line containing that word as chrome — so the walk up the choice
 // list stopped at the first one and the ping went out with options 1 and 2
 // missing, which is what the panel showed.
-const TOKEN_IN_OPTION_TEXT = `⏺ 分支已拉好（ai-assistant 现在在 feature_TRZN-7298，基于最新 origin/master 075235fa，你本地改的两个配置文件原样保留）。代码分析完了，有几个决策点需要你定：
+const TOKEN_IN_OPTION_TEXT = `⏺ 分支已拉好（auth-service 现在在 feature_PROJ-1234，基于最新 origin/master 0a1b2c3d，你本地改的两个配置文件原样保留）。代码分析完了，有几个决策点需要你定：
 ────────────────────────────────────────────────────────────────────────────────
-←  ☐ APP 鉴权  ☐ asr 侧收紧  ☐ 返回内容  ☐ hospital_code  ✔ Submit  →
+←  ☐ APP 鉴权  ☐ api 侧收紧  ☐ 返回内容  ☐ customer_code  ✔ Submit  →
 
-ai-assistant 新增的对外取 token 接口用什么鉴权？
+auth-service 新增的对外取 token 接口用什么鉴权？
 
-› 1. @CheckDoctorTokenParam（推荐）
-     复用现有 AOP，只校验 Authorization 里的医生登录 token，不需要请求体。DoctorFileController 等已在用这个注解
+› 1. @CheckMemberTokenParam（推荐）
+     复用现有 AOP，只校验 Authorization 里的用户登录 token，不需要请求体。MemberFileController 等已在用这个注解
   2. 不鉴权
-     不加鉴权，任何人可从 ai-assistant 取到 ASR token。等于把 asr-service 现在的开放状态原样搬过来
+     不加鉴权，任何人可从 auth-service 取到 API token。等于把 api-service 现在的开放状态原样搬过来
   3. 另设签名机制
      另起一套（如 APP 端专用 appKey/签名），需要新增鉴权代码
   4. Type something.
@@ -1317,7 +1317,7 @@ test("an option that mentions tokens is not mistaken for the footer", () => {
     ["1", "2", "3", "4", "5"],
   );
   const snippet = blockedSnippet(TOKEN_IN_OPTION_TEXT);
-  assert.match(snippet, /@CheckDoctorTokenParam/);
+  assert.match(snippet, /@CheckMemberTokenParam/);
   assert.match(snippet, /不鉴权/);
 });
 
@@ -1339,7 +1339,7 @@ test("a real spinner footer still counts as chrome", () => {
 // form sat on it waiting: no blocked event ever came, so the only panel that
 // opened was a done panel, showing the form as text with nothing to press. The
 // cursor has moved to choice 2 — the user was already reaching for it.
-const FORM_HERDR_CALLED_DONE = `⏺ Before changing anything, confirming that clinmate.trizenai.com really is the domestic Supabase address. My notes have it as the domestic app site, so checking the domestic
+const FORM_HERDR_CALLED_DONE = `⏺ Before changing anything, confirming that dashboard.example.com really is the domestic Supabase address. My notes have it as the domestic app site, so checking the domestic
   build config committed in the repo:
 
   Searched for 2 patterns, ran 1 shell command
@@ -1392,7 +1392,7 @@ test("a form's buttons carry the choice, not its description", () => {
     "Chat about this",
   ]);
   assert.deepEqual(labels(TOKEN_IN_OPTION_TEXT), [
-    "@CheckDoctorTokenParam（推荐）",
+    "@CheckMemberTokenParam（推荐）",
     "不鉴权",
     "另设签名机制",
     "Type something.",
@@ -1410,11 +1410,11 @@ test("a label that wraps keeps its tail and still drops the description", () => 
     rule,
     "Which rollout do you want?",
     "",
-    "❯ 1. Ship it to every hospital at once, including the two that are still on",
+    "❯ 1. Ship it to every customer at once, including the two that are still on",
     "     the old gateway",
     "     Fastest, but the old gateway has never seen this payload.",
     "  2. Canary first",
-    "     One hospital for a day, then the rest.",
+    "     One customer for a day, then the rest.",
     "  3. Type something.",
     rule,
     "Enter to select · Esc to cancel",
@@ -1422,7 +1422,7 @@ test("a label that wraps keeps its tail and still drops the description", () => 
   assert.deepEqual(
     parseBlockedOptions(screen).map((option) => option.label),
     [
-      "Ship it to every hospital at once, including the two that are still on the old gateway",
+      "Ship it to every customer at once, including the two that are still on the old gateway",
       "Canary first",
       "Type something.",
     ],
@@ -1502,7 +1502,7 @@ function formTab(question, first, second) {
 }
 
 test("the panel follows a form to the question that replaces the one answered", async () => {
-  const one = formTab("参数名用哪个？", "hospital_code", "hospitalCode");
+  const one = formTab("参数名用哪个？", "customer_code", "customerCode");
   const two = formTab("透传范围到哪一层？", "只到网关", "一路透传");
   const answered = dialogFingerprint(one);
   const seen = [one, one, two];
@@ -1521,7 +1521,7 @@ test("the panel follows a form to the question that replaces the one answered", 
 });
 
 test("a form that ends gives up instead of reopening the panel", async () => {
-  const one = formTab("参数名用哪个？", "hospital_code", "hospitalCode");
+  const one = formTab("参数名用哪个？", "customer_code", "customerCode");
   // Submitted: the dialog is gone and the agent is working again.
   const next = await nextDialog({
     read: () => "⏺ Running tests…\n\n  ⎿  $ pytest -q",
@@ -1533,7 +1533,7 @@ test("a form that ends gives up instead of reopening the panel", async () => {
 });
 
 test("a screen that never changes runs out of attempts rather than looping", async () => {
-  const one = formTab("参数名用哪个？", "hospital_code", "hospitalCode");
+  const one = formTab("参数名用哪个？", "customer_code", "customerCode");
   let reads = 0;
   const next = await nextDialog({
     read: () => {

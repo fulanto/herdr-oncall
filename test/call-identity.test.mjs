@@ -223,7 +223,7 @@ function card(messageId, screen, call = CALL) {
     messageId,
     paneId: "w1Z:p1",
     status: "blocked",
-    where: "Git-Repo · pane 1",
+    where: "projects · pane 1",
     title: "主会话在等你确认",
     fingerprint: dialogFingerprint(screen),
     options: [
@@ -246,7 +246,7 @@ test(
     const result = await outcome.work();
     assert.equal(result.ok, true);
     assert.ok(world.calls.includes("pane send-keys w1Z:p1 1"));
-    assert.match(world.updates.at(-1).note, /^1\. Yes\nsent · Git-Repo · pane 1$/);
+    assert.match(world.updates.at(-1).note, /^1\. Yes\nsent · projects · pane 1$/);
     assert.equal(lookupOutbound("om_1").spent, "sent");
   }),
 );
@@ -259,7 +259,7 @@ test(
     const result = await handleFeishuEvent(tap("om_1"), world.deps()).work();
     assert.equal(result.replaced, true);
     assert.ok(!world.calls.some((line) => line.includes("send-keys")));
-    assert.match(world.updates.at(-1).note, /^1\. Yes\n弹框变了，没按 · Git-Repo · pane 1\n已换成下面这张新卡片$/);
+    assert.match(world.updates.at(-1).note, /^1\. Yes\n弹框变了，没按 · projects · pane 1\n已换成下面这张新卡片$/);
     // The new card: the dialog as it is drawn now, with its own buttons, in
     // the main session's layout.
     assert.equal(world.sent.length, 1);
@@ -293,7 +293,7 @@ test(
     const result = await handleFeishuEvent(tap("om_1"), world.deps({ callState: () => "answered" })).work();
     assert.equal(result.handled, true);
     assert.equal(world.sent.length, 0);
-    assert.match(world.updates.at(-1).note, /^1\. Yes\n这个确认已经处理过了 · Git-Repo · pane 1$/);
+    assert.match(world.updates.at(-1).note, /^1\. Yes\n这个确认已经处理过了 · projects · pane 1$/);
   }),
 );
 
@@ -327,10 +327,10 @@ test(
   "an escalation keeps its clock while the same call's dialog is redrawn",
   withDir(async () => {
     const t0 = 9_000_000;
-    armEscalation({ paneId: "w75:p7", role: "supervisor", name: "orch-x", kind: "claude", where: "Git-Repo · orch", fingerprint: dialogFingerprint(WIDE), call: CALL, thresholdSec: 300 }, t0);
+    armEscalation({ paneId: "w75:p7", role: "supervisor", name: "orch-x", kind: "claude", where: "projects · orch", fingerprint: dialogFingerprint(WIDE), call: CALL, thresholdSec: 300 }, t0);
     // The hook seeing the redrawn dialog keeps the clock as well.
     assert.equal(
-      armEscalation({ paneId: "w75:p7", role: "supervisor", name: "orch-x", kind: "claude", where: "Git-Repo · orch", fingerprint: dialogFingerprint(NARROW), call: CALL }, t0 + MINUTE).kept,
+      armEscalation({ paneId: "w75:p7", role: "supervisor", name: "orch-x", kind: "claude", where: "projects · orch", fingerprint: dialogFingerprint(NARROW), call: CALL }, t0 + MINUTE).kept,
       true,
     );
     const pinged = [];

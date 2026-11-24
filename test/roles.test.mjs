@@ -45,8 +45,8 @@ function agentList(entries) {
 
 const ENTRIES = [
   { agent: "claude", agent_status: "working", pane_id: "w1Z:p1", workspace_id: "w1Z" },
-  { agent: "claude", agent_status: "done", name: "orch-voice-tool", pane_id: "w75:p4" },
-  { agent: "claude", agent_status: "working", name: "hca-e2e", pane_id: "w7M:p1" },
+  { agent: "claude", agent_status: "done", name: "orch-alpha-tool", pane_id: "w75:p4" },
+  { agent: "claude", agent_status: "working", name: "api-e2e", pane_id: "w7M:p1" },
 ];
 
 // What the herdr CLI prints on stderr when nothing listens on its socket
@@ -88,9 +88,9 @@ test("the four rows of the role table, by Herdr agent name", () => {
   const settings = roleSettings(DROVER);
   assert.equal(classifyRole("drover", settings), "main");
   assert.equal(classifyRole("orch-oncall", settings), "supervisor");
-  assert.equal(classifyRole("hca-e2e", settings), "worker");
+  assert.equal(classifyRole("api-e2e", settings), "worker");
   // A review pane is a worker like any other named agent.
-  assert.equal(classifyRole("hca-e2e-rev", settings), "worker");
+  assert.equal(classifyRole("api-e2e-rev", settings), "worker");
   assert.equal(classifyRole(undefined, settings), "user");
   assert.equal(classifyRole("", settings), "user");
 });
@@ -99,7 +99,7 @@ test("with MAIN_AGENT_NAME empty every pane is the user's, whatever its name", (
   for (const env of [{}, { MAIN_AGENT_NAME: "" }, { MAIN_AGENT_NAME: "   ", SUPERVISOR_PREFIX: "orch-" }]) {
     const settings = roleSettings(env);
     assert.equal(rolesActive(settings), false);
-    for (const name of ["drover", "orch-oncall", "hca-e2e", undefined]) {
+    for (const name of ["drover", "orch-oncall", "api-e2e", undefined]) {
       assert.equal(classifyRole(name, settings), "user");
     }
   }
@@ -151,8 +151,8 @@ test("MAIN_DONE_PING=relay sends a chat answer, a relay, an API error, and nothi
 
   // A relay is judged on this turn's closing answer, leading blanks aside; the
   // marker stays in the text.
-  assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "\n  【转达】目标：orch-voice 等你决定是否推送" }), [
-    { kind: "relay", text: "【转达】目标：orch-voice 等你决定是否推送" },
+  assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "\n  【转达】目标：orch-alpha 等你决定是否推送" }), [
+    { kind: "relay", text: "【转达】目标：orch-alpha 等你决定是否推送" },
   ]);
   assert.deepEqual(mainDonePlan({ ...relay, turnAnswer: "先看一下。【转达】不在开头" }), []);
 
@@ -227,16 +227,16 @@ test("paneRole asks Herdr nothing while MAIN_AGENT_NAME is empty", () => {
 
   const active = paneRole("w7M:p1", { settings: roleSettings(DROVER), run });
   assert.equal(active.role, "worker");
-  assert.equal(active.agent.name, "hca-e2e");
+  assert.equal(active.agent.name, "api-e2e");
   assert.deepEqual(calls, ["agent get w7M:p1"]);
 });
 
 test("an agent's name is its `name`, not its kind, and a pane without one has none", () => {
   const run = fakeRun({ get: { "w1Z:p1": ENTRIES[0], "w75:p4": ENTRIES[1] } });
   assert.deepEqual(paneAgentInfo("w1Z:p1", run), { name: undefined, kind: "claude", status: "working", paneId: "w1Z:p1" });
-  assert.equal(paneAgentInfo("w75:p4", run).name, "orch-voice-tool");
+  assert.equal(paneAgentInfo("w75:p4", run).name, "orch-alpha-tool");
   // `agent get` failing falls back to the list.
-  assert.equal(paneAgentInfo("w7M:p1", run).name, "hca-e2e");
+  assert.equal(paneAgentInfo("w7M:p1", run).name, "api-e2e");
   assert.equal(paneAgentInfo("w9:p9", run), undefined);
 });
 
@@ -296,22 +296,22 @@ test("an orchestrator under a Codex main session escalates sooner", () => {
 test("an escalation says who, for how long, where, and who normally answers", () => {
   const text = escalationText({
     role: "worker",
-    name: "hca-e2e",
+    name: "api-e2e",
     elapsedMs: 10 * 60_000 + 25_000,
-    where: "his-claw-agent · task-private-model-eval-e2e",
+    where: "billing-worker · task-nightly-reports-export",
     body: "Do you want to proceed?  podman machine list",
   });
   assert.deepEqual(text.split("\n"), [
-    "升级 · worker hca-e2e 卡在确认框 10 分钟",
-    "his-claw-agent · task-private-model-eval-e2e",
+    "升级 · worker api-e2e 卡在确认框 10 分钟",
+    "billing-worker · task-nightly-reports-export",
     "这类弹框平时由编排者批，它可能在忙或卡住了",
     "",
     "Do you want to proceed?  podman machine list",
     "",
     "tap a button, or type another answer",
   ]);
-  const orch = escalationText({ role: "supervisor", name: "orch-x", elapsedMs: 5 * 60_000, where: "Git-Repo", body: "" });
-  assert.match(orch, /^升级 · 编排者 orch-x 卡在确认框 5 分钟\nGit-Repo\n这类弹框平时由主会话批/);
+  const orch = escalationText({ role: "supervisor", name: "orch-x", elapsedMs: 5 * 60_000, where: "projects", body: "" });
+  assert.match(orch, /^升级 · 编排者 orch-x 卡在确认框 5 分钟\nprojects\n这类弹框平时由主会话批/);
   assert.equal(stuckFor(45_000), "45 秒");
   // Plain text, like every other message: no emoji anywhere.
   assert.doesNotMatch(text, /\p{Extended_Pictographic}/u);

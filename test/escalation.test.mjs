@@ -102,7 +102,7 @@ test(
   "the same dialog waiting past the threshold is pinged once, and only once",
   withState(async () => {
     const t0 = 1_000_000;
-    arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0);
+    arm("w7M:p1", "worker", "api-e2e", DIALOG, t0);
     const w = world({ screens: { "w7M:p1": DIALOG } });
 
     assert.deepEqual(await w.pass(t0 + 9 * MINUTE), [{ paneId: "w7M:p1", outcome: "waiting" }]);
@@ -111,14 +111,14 @@ test(
     assert.deepEqual(await w.pass(t0 + 10 * MINUTE), [{ paneId: "w7M:p1", outcome: "pinged" }]);
     assert.equal(w.pinged.length, 1);
     const [ping] = w.pinged;
-    assert.match(ping.text, /^升级 · worker hca-e2e 卡在确认框 10 分钟\nrepo · hca-e2e\n这类弹框平时由编排者批/);
+    assert.match(ping.text, /^升级 · worker api-e2e 卡在确认框 10 分钟\nrepo · api-e2e\n这类弹框平时由编排者批/);
     // Its buttons and fingerprint go out with it, as any blocked ping's do.
     assert.deepEqual(
       ping.options.map((option) => option.send),
       ["1", "2", "3"],
     );
     assert.equal(ping.fingerprint, dialogFingerprint(DIALOG));
-    assert.ok(w.lines.includes("escalated · worker · hca-e2e · repo · hca-e2e · after 10 分钟"));
+    assert.ok(w.lines.includes("escalated · worker · api-e2e · repo · api-e2e · after 10 分钟"));
 
     assert.deepEqual(await w.pass(t0 + 11 * MINUTE), [{ paneId: "w7M:p1", outcome: "already" }]);
     assert.deepEqual(await w.pass(t0 + 60 * MINUTE), [{ paneId: "w7M:p1", outcome: "already" }]);
@@ -130,8 +130,8 @@ test(
   "a Herdr event for the same dialog keeps its clock, a different dialog starts over",
   withState(async () => {
     const t0 = 2_000_000;
-    assert.equal(arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0).kept, false);
-    const again = arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0 + 4 * MINUTE);
+    assert.equal(arm("w7M:p1", "worker", "api-e2e", DIALOG, t0).kept, false);
+    const again = arm("w7M:p1", "worker", "api-e2e", DIALOG, t0 + 4 * MINUTE);
     assert.equal(again.kept, true);
     assert.equal(again.record.startedAt, t0);
 
@@ -144,7 +144,7 @@ test(
     assert.deepEqual(await w.pass(t0 + 19 * MINUTE), [{ paneId: "w7M:p1", outcome: "pinged" }]);
 
     // A hook arming a different dialog resets an escalated record too.
-    const fresh = arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0 + 20 * MINUTE);
+    const fresh = arm("w7M:p1", "worker", "api-e2e", DIALOG, t0 + 20 * MINUTE);
     assert.equal(fresh.kept, false);
     assert.equal(fresh.record.escalatedAt, undefined);
   }),
@@ -154,9 +154,9 @@ test(
   "a dialog that left the screen is forgotten, a blank read is not evidence",
   withState(async () => {
     const t0 = 3_000_000;
-    arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0);
-    arm("w7N:p1", "worker", "hca-sbx", DIALOG, t0);
-    arm("w7P:p1", "worker", "hca-aux", DIALOG, t0);
+    arm("w7M:p1", "worker", "api-e2e", DIALOG, t0);
+    arm("w7N:p1", "worker", "api-sbx", DIALOG, t0);
+    arm("w7P:p1", "worker", "api-aux", DIALOG, t0);
     const w = world({ screens: { "w7M:p1": ANSWERED, "w7N:p1": "   " }, closed: ["w7P:p1"] });
 
     const outcomes = await w.pass(t0 + MINUTE);
@@ -166,8 +166,8 @@ test(
       { paneId: "w7P:p1", outcome: "cleared" },
     ]);
     assert.deepEqual(Object.keys(readEscalations()), ["w7N:p1"]);
-    assert.ok(w.lines.includes("escalation cleared · worker · hca-e2e · repo · hca-e2e · dialog gone"));
-    assert.ok(w.lines.includes("escalation cleared · worker · hca-aux · repo · hca-aux · pane closed"));
+    assert.ok(w.lines.includes("escalation cleared · worker · api-e2e · repo · api-e2e · dialog gone"));
+    assert.ok(w.lines.includes("escalation cleared · worker · api-aux · repo · api-aux · pane closed"));
   }),
 );
 
@@ -175,7 +175,7 @@ test(
   "one read without the dialog is read again before the record goes",
   withState(async () => {
     const t0 = 4_000_000;
-    arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0);
+    arm("w7M:p1", "worker", "api-e2e", DIALOG, t0);
     let reads = 0;
     const w = world({ screens: {} });
     // Mid-redraw on the first read, the dialog back on the second.
@@ -203,7 +203,7 @@ test(
   "no phone paired: the desktop panel; neither: a line saying so; switched off: held",
   withState(async () => {
     const t0 = 6_000_000;
-    arm("w7M:p1", "worker", "hca-e2e", DIALOG, t0);
+    arm("w7M:p1", "worker", "api-e2e", DIALOG, t0);
     const panelOnly = world({ screens: { "w7M:p1": DIALOG } });
     assert.deepEqual(await panelOnly.pass(t0 + 10 * MINUTE, { channels: [], panelReady: true }), [
       { paneId: "w7M:p1", outcome: "panel" },
@@ -211,12 +211,12 @@ test(
     assert.equal(panelOnly.panels.length, 1);
     assert.equal(panelOnly.pinged.length, 0);
 
-    arm("w7N:p1", "worker", "hca-sbx", DIALOG, t0);
+    arm("w7N:p1", "worker", "api-sbx", DIALOG, t0);
     const nothing = world({ screens: { "w7M:p1": DIALOG, "w7N:p1": DIALOG } });
     const outcomes = await nothing.pass(t0 + 10 * MINUTE, { channels: [], panelReady: false });
     assert.deepEqual(outcomes.at(-1), { paneId: "w7N:p1", outcome: "unsent" });
 
-    arm("w7P:p1", "worker", "hca-aux", DIALOG, t0);
+    arm("w7P:p1", "worker", "api-aux", DIALOG, t0);
     const off = world({ screens: { "w7M:p1": DIALOG, "w7N:p1": DIALOG, "w7P:p1": DIALOG } });
     assert.deepEqual((await off.pass(t0 + 10 * MINUTE, { enabled: false })).at(-1), { paneId: "w7P:p1", outcome: "held" });
     assert.equal(off.pinged.length, 0);

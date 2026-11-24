@@ -388,7 +388,7 @@ test(
       messageId: "om_dialog",
       paneId: MAIN,
       status: "blocked",
-      where: "Git-Repo · pane 1",
+      where: "projects · pane 1",
       fingerprint: dialogFingerprint(DIALOG),
       options: [{ key: "1", send: "1", label: "Yes" }],
     });
@@ -398,7 +398,7 @@ test(
     );
     assert.equal(outcome.refused, "image");
     assert.deepEqual(herdr.typed(), []);
-    assert.deepEqual(said, ["确认框只能用文字或按钮回答，这条带图片，没送 · Git-Repo · pane 1"]);
+    assert.deepEqual(said, ["确认框只能用文字或按钮回答，这条带图片，没送 · projects · pane 1"]);
     assert.equal(lookupOutbound("om_dialog").spent, undefined, "the card can still be tapped");
 
     // A message of words alone still answers it.
@@ -451,12 +451,12 @@ test(
   withDirs(async ({ images }) => {
     const herdr = herdrStub({ screens: { [WORKER]: IDLE }, statuses: { [WORKER]: "done" } });
     const said = [];
-    rememberOutbound({ messageId: "om_done", paneId: WORKER, status: "done", where: "asr-service · main" });
+    rememberOutbound({ messageId: "om_done", paneId: WORKER, status: "done", where: "api-service · main" });
     const envelope = received("post", { content: [[{ tag: "text", text: "照这个改" }], [{ tag: "img", image_key: "img_1" }]] });
     await run(envelope, deps(herdr, said, { settings: NO_DROVER }));
     const path = join(images, `feishu-${envelope.event.message.message_id}-1.png`);
     assert.deepEqual(herdr.prompts(), [[WORKER, `照这个改\n[图片] ${path}`]]);
-    assert.deepEqual(said, ["sent · asr-service · main"]);
+    assert.deepEqual(said, ["sent · api-service · main"]);
     assert.ok(!herdr.calls.some((args) => args[0] === "agent" && args[1] === "list"), "no main session without drover");
 
     // The same pane now on a dialog: a bare message with an image is refused.
@@ -464,6 +464,6 @@ test(
     const outcome = await run(received("image", { image_key: "img_2" }), deps(blocked, said, { settings: NO_DROVER }));
     assert.equal(outcome.refused, "image");
     assert.deepEqual(blocked.typed(), []);
-    assert.equal(said.at(-1), "确认框只能用文字或按钮回答，这条带图片，没送 · asr-service · main");
+    assert.equal(said.at(-1), "确认框只能用文字或按钮回答，这条带图片，没送 · api-service · main");
   }),
 );

@@ -10,13 +10,13 @@ import {
   worktreeShortName,
 } from "../src/lib/index.mjs";
 
-const REPO_ROOT = "/Users/me/Git-Repo/trizen/trizen-doctor";
-const CHECKOUT = "/Users/me/.herdr/worktrees/trizen-doctor/build-deploy-plan";
+const REPO_ROOT = "/Users/me/projects/sample/sample-portal";
+const CHECKOUT = "/Users/me/.herdr/worktrees/sample-portal/build-deploy-plan";
 
 // `herdr worktree list --workspace <id>` for a repo with one linked worktree.
 const listed = JSON.stringify({
   result: {
-    source: { repo_name: "trizen-doctor", repo_root: REPO_ROOT, source_workspace_id: "w8" },
+    source: { repo_name: "sample-portal", repo_root: REPO_ROOT, source_workspace_id: "w8" },
     worktrees: [
       { branch: "main", is_linked_worktree: false, is_detached: false, open_workspace_id: "w8", path: REPO_ROOT },
       {
@@ -34,14 +34,14 @@ const listed = JSON.stringify({
 // the shape that used to show nothing but the workspace label.
 const plain = JSON.stringify({
   result: {
-    source: { repo_name: "his-claw-agent", repo_root: "/Users/me/Git-Repo/his-claw-agent" },
+    source: { repo_name: "billing-worker", repo_root: "/Users/me/projects/billing-worker" },
     worktrees: [
       {
-        branch: "Copilot5",
+        branch: "develop5",
         is_linked_worktree: false,
         is_detached: false,
         open_workspace_id: "wG",
-        path: "/Users/me/Git-Repo/his-claw-agent",
+        path: "/Users/me/projects/billing-worker",
       },
     ],
   },
@@ -69,9 +69,9 @@ test("worktreeLabel names the worktree, or the branch of a plain checkout", () =
   assert.equal(worktreeLabel({ ...linked, branch: "build_deploy_plan" }), "build-deploy-plan");
   assert.equal(worktreeLabel({ ...linked, branch: "Build/Deploy/Plan" }), "build-deploy-plan");
   assert.equal(worktreeLabel(linked), "build-deploy-plan");
-  assert.equal(worktreeLabel({ ...linked, branch: "feature/TRZN-7298" }), "build-deploy-plan (feature/TRZN-7298)");
+  assert.equal(worktreeLabel({ ...linked, branch: "feature/PROJ-1234" }), "build-deploy-plan (feature/PROJ-1234)");
 
-  assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "Copilot5" }), "Copilot5");
+  assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "develop5" }), "develop5");
   // The default branch is a fact worth stating too.
   assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "main" }), "main");
   assert.equal(worktreeLabel({ is_linked_worktree: false, branch: "master" }), "master");
@@ -81,7 +81,7 @@ test("worktreeLabel names the worktree, or the branch of a plain checkout", () =
 
 test("worktreeShortName is what the workspace label might repeat", () => {
   assert.equal(worktreeShortName({ checkout_path: CHECKOUT, is_linked_worktree: true }), "build-deploy-plan");
-  assert.equal(worktreeShortName({ is_linked_worktree: false, branch: "Copilot5" }), "Copilot5");
+  assert.equal(worktreeShortName({ is_linked_worktree: false, branch: "develop5" }), "develop5");
   assert.equal(worktreeShortName(undefined), undefined);
 });
 
@@ -94,7 +94,7 @@ test("workspaceIdFrom falls back to the pane id prefix", () => {
 
 test("fetchWorktreeInfo picks the entry belonging to this workspace", () => {
   const linked = fetchWorktreeInfo("wJ", fakeHerdr);
-  assert.equal(linked.repo_name, "trizen-doctor");
+  assert.equal(linked.repo_name, "sample-portal");
   assert.equal(linked.checkout_path, CHECKOUT);
   assert.equal(linked.is_linked_worktree, true);
   assert.equal(linked.branch, "build_deploy_plan");
@@ -109,8 +109,8 @@ test("fetchWorktreeInfo picks the entry belonging to this workspace", () => {
 
 test("resolveWorktree works for a plain checkout, which carries no worktree block", () => {
   const info = resolveWorktree({ workspace_id: "wG" }, {}, "wG:p1", fakeHerdr);
-  assert.equal(info.repo_name, "his-claw-agent");
-  assert.equal(info.branch, "Copilot5");
+  assert.equal(info.repo_name, "billing-worker");
+  assert.equal(info.branch, "develop5");
   assert.equal(info.is_linked_worktree, false);
   assert.equal(resolveWorktree({}, {}, "wZ:p1", fakeHerdr), undefined);
 });
@@ -124,25 +124,25 @@ test("formatWhere names the repo and the task, without repeating the workspace",
     },
     { data: { pane_id: "wJ:p1" } },
   );
-  assert.equal(linked, "trizen-doctor · build-deploy-plan · pane 1");
+  assert.equal(linked, "sample-portal · build-deploy-plan · pane 1");
 
   const branch = formatWhere(
     {
       workspace_id: "wG",
-      workspace_label: "his-claw-agent",
+      workspace_label: "billing-worker",
       worktree: resolveWorktree({ workspace_id: "wG" }, {}, "wG:p1", fakeHerdr),
     },
     { data: { pane_id: "wG:p1" } },
   );
-  assert.equal(branch, "his-claw-agent · Copilot5 · pane 1");
+  assert.equal(branch, "billing-worker · develop5 · pane 1");
 
   const onMain = formatWhere(
     {
       workspace_id: "w8",
-      workspace_label: "trizen-doctor",
+      workspace_label: "sample-portal",
       worktree: resolveWorktree({ workspace_id: "w8" }, {}, "w8:p1", fakeHerdr),
     },
     { data: { pane_id: "w8:p1" } },
   );
-  assert.equal(onMain, "trizen-doctor · main · pane 1");
+  assert.equal(onMain, "sample-portal · main · pane 1");
 });

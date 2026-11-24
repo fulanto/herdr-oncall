@@ -25,13 +25,13 @@ import { pollHere, pollerSuperseded, writePollerBinding, writePollerPid } from "
 
 // Which herdr session Oncall belongs to (src/lib/owner.mjs). Two sessions, as
 // in the incident these rules come from: the user's, and a test session
-// started with `herdr --session drtest-resume2`. The paths are under a
+// started with `herdr --session test-session-2`. The paths are under a
 // directory that does not exist, so they read the same on every machine: a
 // socket's path is resolved through the directories that do exist, and `/home`
 // and `/tmp` are symlinks on a Mac.
 const CONFIG = "/oncall-test/herdr";
 const A = `${CONFIG}/herdr.sock`;
-const B = `${CONFIG}/sessions/drtest-resume2/herdr.sock`;
+const B = `${CONFIG}/sessions/test-session-2/herdr.sock`;
 const POLL = "herdr plugin action invoke poll --plugin com.codreamer.herdr.oncall";
 
 const inSession = (socket, extra = {}) => ({ HERDR_SOCKET_PATH: socket, ...extra });
@@ -92,10 +92,10 @@ test("the session a process belongs to is the socket Herdr handed it", () => {
 });
 
 test("with no socket in the environment it is where the herdr CLI would go: HERDR_SESSION's session, else the default", () => {
-  const herdr = sessionList("drtest-resume2");
+  const herdr = sessionList("test-session-2");
   assert.deepEqual(herdrSocket({ env: {}, run: herdr.run }), { path: A, source: "herdr" });
   assert.deepEqual(herdr.calls, ["session list --json"]);
-  assert.deepEqual(herdrSocket({ env: { HERDR_SESSION: "drtest-resume2" }, run: herdr.run }), { path: B, source: "herdr" });
+  assert.deepEqual(herdrSocket({ env: { HERDR_SESSION: "test-session-2" }, run: herdr.run }), { path: B, source: "herdr" });
   // A session that has never run is not listed yet; its socket is still known.
   assert.equal(herdrSocket({ env: { HERDR_SESSION: "new-one" }, run: herdr.run }).path, `${CONFIG}/sessions/new-one/herdr.sock`);
   // "default", and a name herdr would refuse, are the default session.

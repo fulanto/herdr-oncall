@@ -275,7 +275,7 @@ function rememberDialogPing() {
     messageId: "om_7",
     paneId: "w8:p1",
     status: "blocked",
-    where: "asr-service · main",
+    where: "api-service · main",
     title: "blocked · Claude",
     fingerprint: dialogFingerprint(DIALOG),
     options: [
@@ -283,7 +283,7 @@ function rememberDialogPing() {
       { key: "2", send: "2", label: "No" },
     ],
     channel: "feishu",
-    text: "blocked · Claude\nasr-service · main\n\nDo you want to proceed?",
+    text: "blocked · Claude\napi-service · main\n\nDo you want to proceed?",
   });
 }
 
@@ -300,7 +300,7 @@ test("a quoted reply is bound to its dialog, a bare message is not", async () =>
     const stale = await quoted.work();
     assert.equal(stale.stale, true);
     // No dialog left on screen: it was answered, and the card says so.
-    assert.deepEqual(sent.map((message) => message.text), ["这个确认已经处理过了 · asr-service · main"]);
+    assert.deepEqual(sent.map((message) => message.text), ["这个确认已经处理过了 · api-service · main"]);
     assert.ok(!calls.some((call) => call.includes("send-keys") || call.includes("agent prompt")));
 
     const bareCalls = [];
@@ -312,7 +312,7 @@ test("a quoted reply is bound to its dialog, a bare message is not", async () =>
     const delivered = await bare.work();
     assert.equal(delivered.ok, true);
     assert.equal(bareCalls.at(-1), "agent prompt w8:p1 start the next task");
-    assert.match(bareSent.at(-1).text, /^sent · asr-service · main$/);
+    assert.match(bareSent.at(-1).text, /^sent · api-service · main$/);
   });
 });
 
@@ -376,10 +376,10 @@ test("a card tap answers at once with the buttons gone, then says what happened"
     assert.ok(calls.includes("pane send-keys w8:p1 1"), calls.join("\n"));
     assert.equal(updates.length, 1);
     assert.equal(updates[0].messageId, "om_7");
-    assert.equal(updates[0].card.body.elements.at(-1).text.content, "1. Yes\nsent · asr-service · main");
+    assert.equal(updates[0].card.body.elements.at(-1).text.content, "1. Yes\nsent · api-service · main");
     assert.equal(
       updates[0].card.body.elements[0].text.content,
-      "blocked · Claude\nasr-service · main\n\nDo you want to proceed?",
+      "blocked · Claude\napi-service · main\n\nDo you want to proceed?",
     );
     assert.deepEqual(sent, [], "the card itself is the ack");
   });
@@ -420,7 +420,7 @@ test("a failed card update falls back to a message", async () => {
       ),
     );
     await outcome.work();
-    assert.deepEqual(sent.map((message) => message.text), ["sent · asr-service · main"]);
+    assert.deepEqual(sent.map((message) => message.text), ["sent · api-service · main"]);
   });
 });
 

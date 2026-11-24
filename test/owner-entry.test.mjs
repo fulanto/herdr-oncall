@@ -8,7 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 // The incident these cases come from: a worker tested Herdr restarts in a named
-// session (`herdr --session drtest-resume2`), and every start of that server
+// session (`herdr --session test-session-2`), and every start of that server
 // ran this plugin's startup hook against the one state dir a machine has. The
 // hook restarted the poller with the test session's socket, so the user's
 // Feishu taps went to a server that had none of their panes, and after the
@@ -71,11 +71,11 @@ function herdrScript({ calls, dir, aSocket, aMainStatus, aDialog }) {
     `      status=$(cat '${aMainStatus}' 2>/dev/null || echo idle)`,
     `      echo "{\\"result\\":{\\"agents\\":[{\\"name\\":\\"drover\\",\\"pane_id\\":\\"${PANE}\\",\\"agent\\":\\"claude\\",\\"agent_status\\":\\"$status\\"}]}}"`,
     "    else",
-    `      echo '{"result":{"agents":[{"name":"hca-e2e","pane_id":"${PANE}","agent":"claude","agent_status":"blocked"}]}}'`,
+    `      echo '{"result":{"agents":[{"name":"api-e2e","pane_id":"${PANE}","agent":"claude","agent_status":"blocked"}]}}'`,
     "    fi",
     "    exit 0 ;;",
     '  "agent get")',
-    `    echo '{"result":{"agent":{"name":"hca-e2e","pane_id":"${PANE}","agent":"claude","agent_status":"blocked"}}}'`,
+    `    echo '{"result":{"agent":{"name":"api-e2e","pane_id":"${PANE}","agent":"claude","agent_status":"blocked"}}}'`,
     "    exit 0 ;;",
     '  "pane read")',
     // A's pane is idle unless a case puts a dialog on it; B's always asks.
@@ -108,7 +108,7 @@ async function sandbox({ drover = true } = {}) {
     writeFileSync(join(config, "drover.env"), ["MAIN_AGENT_NAME=drover", "BARE_MESSAGE_TARGET=main"].join("\n"));
   }
   const A = { socket: join(dir, "a.sock") };
-  const B = { socket: join(dir, "b.sock"), name: "drtest-resume2" };
+  const B = { socket: join(dir, "b.sock"), name: "test-session-2" };
   // A build step: Herdr strips its socket, its session and every HERDR_PLUGIN_
   // variable from a build's environment (the two directories stay here only
   // to keep the case in its sandbox).
@@ -336,7 +336,7 @@ test("the owner's server going away hands nothing over; only poll moves Oncall, 
     const waiting = boardItem("kept", "全部收尾：a");
     box.put("main-inbox.json", [waiting]);
     box.put("outbound.json", { om_1: { paneId: PANE, status: "done", at: Date.now() }, om_2: { paneId: PANE, status: "blocked", at: Date.now() } });
-    box.put("escalations.json", { [PANE]: { paneId: PANE, role: "worker", name: "hca-e2e", startedAt: Date.now() } });
+    box.put("escalations.json", { [PANE]: { paneId: PANE, role: "worker", name: "api-e2e", startedAt: Date.now() } });
     box.put("main-pending.json", [{ id: "p1", paneId: PANE, channel: "feishu", messageId: "om_9", text: "[飞书] 进度？", deliveredAt: Date.now() }]);
     box.put("panels.json", { [PANE]: { pid: 999_999, kind: "blocked" } });
     box.put("blocked-delay.json", { [PANE]: 1 });

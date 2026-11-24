@@ -33,7 +33,7 @@ const toMain = (text, options) => routeToMain(textParts(text), options);
 // `herdr pane read <pane> --source visible --format ansi` (bottom lines).
 const RULE = "\x1b[0m\x1b[38;5;7m──────────────────────────────────────────────────────────────────────\x1b[0m";
 const CLAUDE_FOOTER = [
-  "  \x1b[0m\x1b[1m\x1b[38;5;2m➜\x1b[0m\x1b[2m\x1b[38;5;7m \x1b[0m\x1b[38;5;6mtask-oncall-into-drover-plugin\x1b[0m\x1b[2m\x1b[38;5;7m \x1b[0m\x1b[1m\x1b[38;5;4mgit:(\x1b[0m\x1b[38;5;1mtask/oncall-into-drover-plu…\x1b[0m",
+  "  \x1b[0m\x1b[1m\x1b[38;5;2m➜\x1b[0m\x1b[2m\x1b[38;5;7m \x1b[0m\x1b[38;5;6mtask-sample-into-plugin-module\x1b[0m\x1b[2m\x1b[38;5;7m \x1b[0m\x1b[1m\x1b[38;5;4mgit:(\x1b[0m\x1b[38;5;1mtask/sample-into-plugin-mod…\x1b[0m",
   "  \x1b[0m\x1b[38;5;11m⏵⏵ auto mode on\x1b[0m\x1b[2m\x1b[38;5;7m (shift+tab to cycle) · ← 1 agent\x1b[0m",
 ];
 function claudeBox(...boxLines) {
@@ -589,7 +589,7 @@ test(
     const state = { main: { agent: "claude", agent_status: "idle" } };
     const herdr = mainHerdr(state);
     const chat = recorder();
-    rememberOutbound({ messageId: "om_done", paneId: MAIN, status: "done", where: "Git-Repo · pane 1" });
+    rememberOutbound({ messageId: "om_done", paneId: MAIN, status: "done", where: "projects · pane 1" });
     await feishu(feishuText("继续", { parent: "om_done" }), feishuDeps(herdr.run, chat));
     assert.deepEqual(herdr.prompts(), [[MAIN, "[飞书] 继续"]]);
 
@@ -599,7 +599,7 @@ test(
       messageId: "om_dialog",
       paneId: MAIN,
       status: "blocked",
-      where: "Git-Repo · pane 1",
+      where: "projects · pane 1",
       fingerprint: dialogFingerprint(DIALOG),
       options: [{ key: "1", send: "1", label: "Yes" }],
     });
@@ -615,7 +615,7 @@ test(
   withState(async () => {
     const herdr = mainHerdr({ main: { agent: "claude", agent_status: "idle" } });
     const chat = recorder();
-    rememberOutbound({ messageId: "om_worker", paneId: "w7M:p1", status: "done", where: "his-claw-agent · e2e" });
+    rememberOutbound({ messageId: "om_worker", paneId: "w7M:p1", status: "done", where: "billing-worker · e2e" });
     await feishu(feishuText("再跑一遍", { parent: "om_worker" }), feishuDeps(herdr.run, chat));
     assert.deepEqual(herdr.prompts(), [["w7M:p1", "再跑一遍"]]);
 
@@ -635,7 +635,7 @@ test(
     const deps = feishuDeps(herdr.run, chat, { settings: none, setEnabled: (value) => switched.push(value) });
     assert.deepEqual(handleFeishuEvent(feishuText("/off"), deps), { skipped: "command" });
     assert.deepEqual(switched, []);
-    rememberOutbound({ messageId: "om_any", paneId: "w8:p1", status: "done", where: "asr-service · main" });
+    rememberOutbound({ messageId: "om_any", paneId: "w8:p1", status: "done", where: "api-service · main" });
     await feishu(feishuText("!ls"), deps);
     // Exactly what 0.6.6 typed: no prefix, no main session.
     assert.deepEqual(herdr.prompts(), [["w8:p1", "!ls"]]);

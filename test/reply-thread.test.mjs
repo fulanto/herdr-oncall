@@ -9,9 +9,9 @@ import { pingChannels, replyFeishu, sendRemote, sendTelegram } from "../src/lib/
 test("pingChannels replies only on the channel the turn came from", async () => {
   const sent = [];
   const log = [];
-  await pingChannels(["telegram", "feishu"], "done · Claude\nGit-Repo · pane 1\n\n三个编排者都在跑。", {
+  await pingChannels(["telegram", "feishu"], "done · Claude\nprojects · pane 1\n\n三个编排者都在跑。", {
     status: "done",
-    where: "Git-Repo · pane 1",
+    where: "projects · pane 1",
     replyTo: (channel) => (channel === "feishu" ? "om_user_1" : undefined),
     send: async (channel, _text, options) => {
       sent.push([channel, options.replyTo]);
@@ -24,7 +24,7 @@ test("pingChannels replies only on the channel the turn came from", async () => 
     ["telegram", undefined],
     ["feishu", "om_user_1"],
   ]);
-  assert.deepEqual(log, ["sent · telegram · Git-Repo · pane 1", "sent · feishu · Git-Repo · pane 1 · as a reply"]);
+  assert.deepEqual(log, ["sent · telegram · projects · pane 1", "sent · feishu · projects · pane 1 · as a reply"]);
 });
 
 // A stand-in for the Feishu open platform, answering the token call and

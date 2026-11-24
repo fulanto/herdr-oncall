@@ -171,7 +171,7 @@ function withSession(agent, body) {
     const file =
       agent === "codex"
         ? join(dir, "codex", "sessions", "2026", "11", "08", `rollout-2026-11-08T08-50-00-${SESSION}.jsonl`)
-        : join(dir, "claude", "projects", "-Users-fangtao-Git-Repo", `${SESSION}.jsonl`);
+        : join(dir, "claude", "projects", "-Users-someone-projects", `${SESSION}.jsonl`);
     mkdirSync(join(file, ".."), { recursive: true });
     const write = (records) => writeFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
     const run = (args) =>
@@ -214,11 +214,11 @@ const quietLog = () => {};
 // hours after these tests were written. The done comes after the records were
 // written, so its time is the clock's, read when it runs.
 function done(deps, settings, turnAnswer) {
-  return mainDonePings({ paneId: MAIN, where: "Git-Repo · pane 1", turnAnswer, settings, now: clock, wait: async () => {}, log: quietLog, ...deps });
+  return mainDonePings({ paneId: MAIN, where: "projects · pane 1", turnAnswer, settings, now: clock, wait: async () => {}, log: quietLog, ...deps });
 }
 
 function deliver(pings, send) {
-  return sendMainPings(pings, { paneId: MAIN, where: "Git-Repo · pane 1", title: "done · Claude", channels: ["feishu"], send, now: clock, log: quietLog, error: quietLog });
+  return sendMainPings(pings, { paneId: MAIN, where: "projects · pane 1", title: "done · Claude", channels: ["feishu"], send, now: clock, log: quietLog, error: quietLog });
 }
 
 test(
@@ -231,7 +231,7 @@ test(
     await deliver(pings, out.send);
     assert.deepEqual(out.sent, [{ channel: "feishu", text: ANSWER, replyTo: "om_q" }]);
     // Bare: no "done · Claude" title, no location line.
-    assert.ok(!out.sent[0].text.includes("done · Claude") && !out.sent[0].text.includes("Git-Repo · pane 1"));
+    assert.ok(!out.sent[0].text.includes("done · Claude") && !out.sent[0].text.includes("projects · pane 1"));
     assert.deepEqual(pendingAnswers(MAIN, clock), []);
     // A reply to the answer is a prompt for the main session, as before.
     assert.equal(lookupOutbound("om_out_1", clock).status, "done");
@@ -277,7 +277,7 @@ test(
     const out = channelRecorder();
     await sendMainPings(await done({ run, env }, RELAY, MONITOR_TURN), {
       paneId: MAIN,
-      where: "Git-Repo · pane 1",
+      where: "projects · pane 1",
       title: "done · Claude",
       channels: ["feishu", "telegram"],
       send: out.send,
@@ -300,8 +300,8 @@ test(
     write([said("无关")]);
     assert.deepEqual(await done({ run, env }, RELAY, "内部处理完了"), []);
     const out = channelRecorder();
-    await deliver(await done({ run, env }, RELAY, "【转达】orch-voice 等你决定是否推送"), out.send);
-    assert.deepEqual(out.sent, [{ channel: "feishu", text: "【转达】orch-voice 等你决定是否推送", replyTo: undefined }]);
+    await deliver(await done({ run, env }, RELAY, "【转达】orch-alpha 等你决定是否推送"), out.send);
+    assert.deepEqual(out.sent, [{ channel: "feishu", text: "【转达】orch-alpha 等你决定是否推送", replyTo: undefined }]);
   }),
 );
 

@@ -43,14 +43,14 @@ test("outbound maps telegram message ids to panes", () => {
   process.env.HERDR_PLUGIN_STATE_DIR = dir;
   try {
     rememberOutbound(
-      { messageId: 42, paneId: "w8:p1", status: "blocked", where: "asr-service · simple" },
+      { messageId: 42, paneId: "w8:p1", status: "blocked", where: "api-service · simple" },
       1000,
     );
     const hit = lookupOutbound(42, 1000);
     assert.equal(hit.paneId, "w8:p1");
     assert.equal(lastOutbound(1000).paneId, "w8:p1");
     const byReply = resolveReplyTarget({ reply_to_message: { message_id: 42 } }, 1000);
-    assert.equal(byReply.where, "asr-service · simple");
+    assert.equal(byReply.where, "api-service · simple");
     const bare = resolveReplyTarget({ text: "go" }, 1000);
     assert.equal(bare.paneId, "w8:p1");
   } finally {
@@ -112,7 +112,7 @@ test("outbound remembers what the dialog was asking", () => {
         messageId: 7,
         paneId: "w8:p1",
         status: "blocked",
-        where: "asr-service · main",
+        where: "api-service · main",
         fingerprint,
         options: [{ key: "1", send: "1", label: "Yes" }],
       },
@@ -416,7 +416,7 @@ test("an explicit reply is bound to its dialog, a bare message is not", async ()
       messageId: 7,
       paneId: "w8:p1",
       status: "blocked",
-      where: "asr-service · main",
+      where: "api-service · main",
       fingerprint: dialogFingerprint(DIALOG),
       options: [{ key: "1", send: "1", label: "Yes" }],
     });
@@ -429,7 +429,7 @@ test("an explicit reply is bound to its dialog, a bare message is not", async ()
       inboundDeps(MOVED_ON, explicitCalls, explicitSent),
     );
     assert.equal(explicit.stale, true);
-    assert.match(explicitSent.at(-1), /^这个确认已经处理过了 · asr-service · main$/);
+    assert.match(explicitSent.at(-1), /^这个确认已经处理过了 · api-service · main$/);
     assert.equal(
       explicitCalls.some((call) => call.includes("send-keys") || call.includes("agent prompt")),
       false,
@@ -471,7 +471,7 @@ test("a button tap that names an unknown message reaches no pane", async () => {
       messageId: 7,
       paneId: "w8:p1",
       status: "blocked",
-      where: "asr-service · main",
+      where: "api-service · main",
       fingerprint: dialogFingerprint(DIALOG),
     });
     const calls = [];
@@ -573,7 +573,7 @@ test("the main session's form follows on as the main session's card: no location
       messageId: 7,
       paneId: "w1Z:p1",
       status: "blocked",
-      where: "Git-Repo · pane 1",
+      where: "projects · pane 1",
       title: "主会话在等你确认",
       fingerprint: dialogFingerprint(TAB_ONE),
       options: [],
@@ -591,7 +591,7 @@ test("the main session's form follows on as the main session's card: no location
     assert.equal(result.followed, true);
     const ping = sent[1];
     assert.match(ping.text, /^主会话在等你确认\n\n/);
-    assert.ok(!ping.text.includes("Git-Repo · pane 1"));
+    assert.ok(!ping.text.includes("projects · pane 1"));
     assert.match(ping.text, /What should happen to it\?/);
     assert.equal(lookupOutbound(ping.id).layout, "main");
   });
@@ -603,7 +603,7 @@ test("answering a form's question from telegram pings the next one", async () =>
       messageId: 7,
       paneId: "w8:p1",
       status: "blocked",
-      where: "trizen-doctor · release_20260930 · pane 1",
+      where: "sample-portal · release_20250101 · pane 1",
       title: "blocked · Claude",
       fingerprint: dialogFingerprint(TAB_ONE),
       options: [],
@@ -631,7 +631,7 @@ test("answering a form's question from telegram pings the next one", async () =>
     assert.equal(sent.length, 2, "the ack, then the next question");
     assert.match(sent[0].text, /^sent · /);
     const ping = sent[1];
-    assert.match(ping.text, /^blocked · Claude\ntrizen-doctor · release_20260930 · pane 1\n/);
+    assert.match(ping.text, /^blocked · Claude\nsample-portal · release_20250101 · pane 1\n/);
     assert.match(ping.text, /What should happen to it\?/);
     assert.deepEqual(ping.buttons, ["1. Drop it", "2. Keep it on both surfaces", "3. Type something."]);
     // The next ping is a ping like any other: its buttons are bound to its own
@@ -653,7 +653,7 @@ test("a one-off dialog answered from telegram pings nothing more", async () => {
       messageId: 7,
       paneId: "w8:p1",
       status: "blocked",
-      where: "asr-service · main",
+      where: "api-service · main",
       fingerprint: dialogFingerprint(DIALOG),
     });
     const calls = [];
@@ -676,7 +676,7 @@ test("a one-off dialog answered from telegram pings nothing more", async () => {
     assert.equal(result.followed, undefined);
     assert.deepEqual(
       sent.map((message) => message.text),
-      ["sent · asr-service · main"],
+      ["sent · api-service · main"],
     );
   });
 });
@@ -687,7 +687,7 @@ test("a lost follow-on ping does not undo the answer that went through", async (
       messageId: 7,
       paneId: "w8:p1",
       status: "blocked",
-      where: "trizen-doctor · pane 1",
+      where: "sample-portal · pane 1",
       fingerprint: dialogFingerprint(TAB_ONE),
     });
     const calls = [];

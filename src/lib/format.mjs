@@ -517,7 +517,7 @@ function isChromeLine(line) {
   }
   // Key hints and the spinner footer. `tokens` must carry its count: the bare
   // word matched any short line that merely mentioned one, and an option whose
-  // description read "任何人可从 ai-assistant 取到 ASR token" was read as a
+  // description read "任何人可从 auth-service 取到 API token" was read as a
   // footer — the walk up the choice list stopped dead there and the ping went
   // out with the first two options missing.
   if (

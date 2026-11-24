@@ -76,7 +76,7 @@ const PAIRED = {
 
 // The herdr session a status call runs in, and another one.
 const HERE = { path: "/home/u/.config/herdr/herdr.sock", source: "env" };
-const ELSEWHERE = "/home/u/.config/herdr/sessions/drtest-resume2/herdr.sock";
+const ELSEWHERE = "/home/u/.config/herdr/sessions/test-session-2/herdr.sock";
 
 test("status reports what is set up, never a secret", () => {
   const calls = [];

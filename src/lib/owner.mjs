@@ -20,7 +20,7 @@ import { actionCommand } from "./setup.mjs";
 // restarted the poller with the test session's socket in its environment. The
 // user's Feishu taps were then typed at a server that had none of their panes,
 // and once the test session was deleted, at a socket nobody listened on:
-// "no herdr server is running at …/sessions/drtest-resume2/herdr.sock".
+// "no herdr server is running at …/sessions/<name>/herdr.sock".
 //
 // So the owner is a record, `<state>/owner.json`, naming a session by its API
 // socket path, and it is written in exactly two cases: there is no record yet
