@@ -1,5 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import {
   blockedSnippet,
   callState,
@@ -25,6 +24,7 @@ import {
   showPanel,
   sleep,
   stuckFor,
+  writeFileAtomic,
 } from "../lib/index.mjs";
 import { deliverReply, herdrErrorText, herdrFailed, rememberOutbound } from "./reply.mjs";
 import { describeError } from "./poller.mjs";
@@ -53,9 +53,9 @@ export function readEscalations() {
   }
 }
 
+// The hook arms and the poller settles, each its own process.
 function writeEscalations(store) {
-  mkdirSync(dirname(storePath()), { recursive: true });
-  writeFileSync(storePath(), JSON.stringify(store), "utf8");
+  writeFileAtomic(storePath(), JSON.stringify(store));
 }
 
 // Whether two sightings are the same dialog: by the tool call when both have

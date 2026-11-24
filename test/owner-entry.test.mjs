@@ -35,7 +35,12 @@ function paneEvent(status) {
   };
 }
 
+// No pid on record (0) is no poller: signal 0 to pid 0 goes to this process's
+// own group and always succeeds.
 function alive(pid) {
+  if (!(pid > 1)) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -342,6 +347,9 @@ test("the owner's server going away hands nothing over; only poll moves Oncall, 
     box.put("blocked-delay.json", { [PANE]: 1 });
     box.put("last-notify.json", { [`${PANE}:blocked`]: 1 });
 
+    // What B's herdr has been asked so far (status above already asked it for
+    // the main session): only a call made from here on is the new poller's.
+    const asked = box.herdrCalls(box.B).length;
     const moved = await box.run(box.B, "src/actions/poll.mjs");
     assert.equal(moved.code, 0, moved.out);
     const next = box.pollerPid();
@@ -359,7 +367,7 @@ test("the owner's server going away hands nothing over; only poll moves Oncall, 
     // A queued message names no pane: it is still there, for the main session
     // of the herdr Oncall belongs to now.
     assert.equal(box.json("main-inbox.json")[0].id, "kept");
-    await waitFor(() => box.herdrCalls(box.B).includes("agent list"), "the new poller to ask B's herdr");
+    await waitFor(() => box.herdrCalls(box.B).slice(asked).includes("agent list"), "the new poller to ask B's herdr");
 
     // A is the outsider now.
     const back = await box.run(box.A, "src/actions/seed.mjs", { env: STARTUP });
@@ -370,7 +378,9 @@ test("the owner's server going away hands nothing over; only poll moves Oncall, 
     box.put("outbound.json", { om_3: { paneId: PANE, status: "done", at: Date.now() } });
     const again = await box.run(box.B, "src/actions/poll.mjs");
     assert.equal(again.code, 0, again.out);
-    assert.notEqual(box.pollerPid(), next);
+    const restarted = box.pollerPid();
+    assert.notEqual(restarted, next);
+    assert.ok(alive(restarted));
     assert.deepEqual(Object.keys(box.json("outbound.json")), ["om_3"]);
     assert.equal(box.json("owner.json").socket, box.B.socket);
   } finally {

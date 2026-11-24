@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   dropPaneState,
@@ -12,6 +12,7 @@ import {
   stateDir,
   tryLock,
   unlock,
+  writeFileAtomic,
 } from "../lib/index.mjs";
 
 const LOG_MAX_BYTES = 256 * 1024;
@@ -67,10 +68,14 @@ export function pollerAlive(pid = pollerPid()) {
   }
 }
 
+// The pid file and the binding below are each written twice for every start:
+// by whoever started the poller, and again by the poller as it comes up. Any
+// hook, `status`, or another poller's self-check can read them in between, so
+// each write puts a whole file in place (writeFileAtomic). Written in place,
+// a read that landed in the poller's own write found the pid file empty, which
+// reads as "no poller".
 export function writePollerPid(pid = process.pid) {
-  const path = pidPath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${pid}\n`, "utf8");
+  writeFileAtomic(pidPath(), `${pid}\n`);
 }
 
 // Which herdr server the poller talks to: `<state>/poller.json`,
@@ -80,8 +85,7 @@ export function writePollerPid(pid = process.pid) {
 // it; this record only counts for the pid it names, so one left by a poller
 // that is gone reads as no record.
 export function writePollerBinding({ pid = process.pid, socket }) {
-  mkdirSync(dirname(bindingPath()), { recursive: true });
-  writeFileSync(bindingPath(), JSON.stringify({ pid, socket }), "utf8");
+  writeFileAtomic(bindingPath(), JSON.stringify({ pid, socket }));
 }
 
 export function pollerBinding(pid = pollerPid()) {

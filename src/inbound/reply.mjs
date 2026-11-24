@@ -38,6 +38,7 @@ import {
   textParts,
   undeliveredNote,
   upsertEnvValue,
+  writeFileAtomic,
 } from "../lib/index.mjs";
 import { describeError } from "./poller.mjs";
 import { OFF_NOTICE, routeChatMessage } from "./main-inbox.mjs";
@@ -96,9 +97,10 @@ function readJson(path, fallback) {
   }
 }
 
+// outbound.json is written by every hook that sends a ping and by the poller,
+// and read by both: a whole file is put in place, never rewritten in place.
 function writeJson(path, value) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value), "utf8");
+  writeFileAtomic(path, JSON.stringify(value));
 }
 
 export function pruneOutbound(store, now = Date.now()) {

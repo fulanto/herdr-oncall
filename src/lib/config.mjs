@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeFileAtomic } from "./atomic.mjs";
 import { configDirPath, pluginRoot, stateDir } from "./paths.mjs";
 
 export const DEFAULT_NOTIFY_ON = "blocked,done";
@@ -178,10 +179,10 @@ export function modeEnabled() {
   return !["0", "false", "no", "off", "disabled"].includes(raw);
 }
 
+// The switch is read by every hook and by the poller. An empty file reads as
+// "on", so it is never left empty for a moment: a whole file is put in place.
 export function setMode(enabled) {
-  const path = modePath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, enabled ? "enabled\n" : "disabled\n", "utf8");
+  writeFileAtomic(modePath(), enabled ? "enabled\n" : "disabled\n");
 }
 
 export function setWindowTitleIndicator(enabled) {

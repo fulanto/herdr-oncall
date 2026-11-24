@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { writeFileAtomic } from "./atomic.mjs";
 import { DEFAULT_NOTIFY_ON } from "./config.mjs";
 import { paneStatePath } from "./paths.mjs";
 
@@ -104,8 +104,7 @@ export function shouldDebounce(paneId, status, now = Date.now()) {
     return true;
   }
   store[key] = now;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(store), "utf8");
+  writeFileAtomic(path, JSON.stringify(store));
   return false;
 }
 
@@ -133,8 +132,7 @@ export function markBlockedDelay(paneId, now = Date.now()) {
   const path = delayStorePath();
   const store = readJsonFile(path);
   store[paneId] = now;
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(store), "utf8");
+  writeFileAtomic(path, JSON.stringify(store));
   return now;
 }
 

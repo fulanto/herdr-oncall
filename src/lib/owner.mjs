@@ -1,7 +1,8 @@
-import { existsSync, linkSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { tempFile, writeFileAtomic } from "./atomic.mjs";
 import { herdrJson } from "./herdr.mjs";
 import { HERDR_APP_DIRS, PANE_STATE_FILES, runHerdr, stateDir } from "./paths.mjs";
 import { actionCommand } from "./setup.mjs";
@@ -140,16 +141,8 @@ export function readOwner() {
   }
 }
 
-function tempRecord(record) {
-  const path = ownerPath();
-  mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, JSON.stringify(record), "utf8");
-  return temp;
-}
-
 function replaceOwner(record) {
-  renameSync(tempRecord(record), ownerPath());
+  writeFileAtomic(ownerPath(), JSON.stringify(record));
   return record;
 }
 
@@ -158,7 +151,7 @@ function replaceOwner(record) {
 // or fails because it exists, so exactly one of them gets it and the other
 // reads the winner's.
 function createOwner(record) {
-  const temp = tempRecord(record);
+  const temp = tempFile(ownerPath(), JSON.stringify(record));
   try {
     linkSync(temp, ownerPath());
     return record;

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   actionCommand,
@@ -31,6 +31,7 @@ import {
   tryLock,
   undeliveredNote,
   unlock,
+  writeFileAtomic,
 } from "../lib/index.mjs";
 import {
   NO_TARGET,
@@ -418,9 +419,11 @@ function readJson(path, fallback) {
   }
 }
 
+// Both files have readers outside the lock below (`status`, the idle check of
+// the inbox loop, the notify hook looking for a waiting chat message), so a
+// whole file is put in place, never rewritten in place.
 function writeJson(path, value) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value), "utf8");
+  writeFileAtomic(path, JSON.stringify(value));
 }
 
 export function readInbox() {

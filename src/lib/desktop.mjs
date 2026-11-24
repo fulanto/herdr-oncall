@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { writeFileAtomic } from "./atomic.mjs";
 import { envFlag } from "./config.mjs";
 import { paneStatePath, pluginRoot } from "./paths.mjs";
 import { blockedDelayMs } from "./gate.mjs";
@@ -159,8 +160,7 @@ function readPanelPids() {
 }
 
 function writePanelPids(store) {
-  mkdirSync(dirname(panelPidsPath()), { recursive: true });
-  writeFileSync(panelPidsPath(), JSON.stringify(store), "utf8");
+  writeFileAtomic(panelPidsPath(), JSON.stringify(store));
 }
 
 // panels.json maps a pane to the panel standing on it. Older builds wrote a

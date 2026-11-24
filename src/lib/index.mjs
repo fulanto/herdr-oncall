@@ -1,4 +1,5 @@
 export * from "./paths.mjs";
+export * from "./atomic.mjs";
 export * from "./lock.mjs";
 export * from "./owner.mjs";
 export * from "./config.mjs";
